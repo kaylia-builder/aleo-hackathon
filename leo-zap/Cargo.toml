@@ -1,0 +1,25 @@
+[package]
+name = "leo-zap"
+version = "0.1.0"
+edition = "2021"
+description = "Property-based fuzzer + privacy invariant checker for Aleo Leo contracts"
+license = "MIT"
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive"] }
+# 错误处理
+anyhow = "1"
+thiserror = "1"
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 日志
+env_logger = "0.11"
+log = "0.4"
+# 随机数（fuzzer 核心）
+rand = "0.8"
+
+[dev-dependencies]
+# 测试
+pretty_assertions = "1"
