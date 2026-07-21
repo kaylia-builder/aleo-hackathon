@@ -1,4 +1,7 @@
+mod parser;
+
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 /// LeoZap - Property-based fuzzer + privacy invariant checker for Aleo Leo contracts
 #[derive(Parser, Debug)]
@@ -16,13 +19,18 @@ enum Commands {
     Parse {
         /// Path to the .aleo file (e.g. build/token/token.aleo)
         #[arg(short, long)]
-        file: String,
+        file: PathBuf,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Run the fuzzer on a contract
     Fuzz {
         /// Path to the .aleo file
         #[arg(short, long)]
-        file: String,
+        file: PathBuf,
+
         /// Number of fuzz iterations
         #[arg(short, long, default_value_t = 1000)]
         runs: u32,
@@ -31,10 +39,11 @@ enum Commands {
     Check {
         /// Path to the .aleo file
         #[arg(short, long)]
-        file: String,
+        file: PathBuf,
+
         /// Path to the invariant spec file
         #[arg(short, long)]
-        spec: String,
+        spec: PathBuf,
     },
 }
 
@@ -43,20 +52,29 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Parse { file } => {
-            println!("🔍 Parsing {}", file);
-            // TODO: 实现 .aleo parser
-            println!("(parser not implemented yet)");
+        Commands::Parse { file, json } => {
+            let content = std::fs::read_to_string(&file)
+                .map_err(|e| anyhow::anyhow!("failed to read {}: {}", file.display(), e))?;
+
+            let contract = parser::parse(&content)?;
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&contract)?);
+            } else {
+                print!("{}", contract.pretty_print());
+            }
         }
         Commands::Fuzz { file, runs } => {
-            println!("⚡ Fuzzing {} ({} runs)", file, runs);
-            // TODO: 实现 fuzzer
-            println!("(fuzzer not implemented yet)");
+            println!("⚡ Fuzzing {} ({} runs)", file.display(), runs);
+            println!("(fuzzer not implemented yet — W2 task)");
         }
         Commands::Check { file, spec } => {
-            println!("✅ Checking invariants for {} with spec {}", file, spec);
-            // TODO: 实现 invariant checker
-            println!("(invariant checker not implemented yet)");
+            println!(
+                "✅ Checking invariants for {} with spec {}",
+                file.display(),
+                spec.display()
+            );
+            println!("(invariant checker not implemented yet — W3 task)");
         }
     }
     Ok(())
