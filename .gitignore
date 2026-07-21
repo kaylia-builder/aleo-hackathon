@@ -1,0 +1,26 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Leo
+build/
+*.aleo.lock
+leo.lock
+
+# 私钥（绝对不能提交）
+*.private
+*.key
+*.env
+.env
+secrets/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Demo 临时文件
+demo/raw/
