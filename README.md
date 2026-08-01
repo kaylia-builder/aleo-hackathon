@@ -1,90 +1,297 @@
-# Aleo Hackathon Project
+# 🧱 LeoZap
 
-> Building the future of programmable privacy on Aleo.
+> **Aleo 生态首个 Property-Based Fuzzer + Privacy Invariant Checker**
+>
+> 对标 Foundry forge fuzz · Move Prover · Echidna
 
-## Project: LeoZap
+<p align="center">
+  <img src="https://img.shields.io/badge/status-hackathon--ready-brightgreen?style=for-the-badge" alt="status">
+  <img src="https://img.shields.io/badge/tests-85%20passed-brightgreen?style=for-the-badge" alt="tests">
+  <img src="https://img.shields.io/badge/Aleo-Leo%204.3.4-blue?style=for-the-badge" alt="leo">
+  <img src="https://img.shields.io/badge/Rust-2021%20edition-orange?style=for-the-badge" alt="rust">
+  <img src="https://img.shields.io/badge/license-MIT-lightgrey?style=for-the-badge" alt="license">
+</p>
 
-Property-based fuzzer + privacy invariant checker for Aleo Leo contracts.
+<p align="center">
+  <a href="http://bore.pub:46914"><b>🖥️ Live Demo</b></a> &nbsp;·&nbsp;
+  <a href="#-quick-start"><b>⚡ Quick Start</b></a> &nbsp;·&nbsp;
+  <a href="#-architecture"><b>🏗️ Architecture</b></a> &nbsp;·&nbsp;
+  <a href="#-invariant-spec-dsl"><b>📐 Spec DSL</b></a> &nbsp;·&nbsp;
+  <a href="#-ecosystem-comparison"><b>🌍 Ecosystem</b></a>
+</p>
 
-### Why
-Aleo 完全没有 property test / fuzz / 覆盖率 / 不变式断言工具（`leo test` 只支持 golden test）。
-对标 Foundry forge fuzz / Move Prover。
+---
 
-### How
-- 解析编译后的 `.aleo` instructions（稳定 IR），而非 `.leo` 源码
-- 自动生成随机隐私输入（针对 `.private` 字段）
-- 符号执行追踪寄存器值，检测 underflow/overflow/balance mismatch
-- 验证隐私不变式（余额守恒、owner 不变式等）
-- **🆕 真实 ZK Proof 验证**：调用 `leo run` 生成零知识证明，对比符号执行结果与真实 snarkVM 执行，发现隐私语义 bug
+## 🎯 Why LeoZap?
 
-### Quick Start
+| Aleo 现状 | LeoZap 解法 |
+|-----------|-------------|
+| `leo test` 只支持 golden test | 随机生成隐私输入，符号执行追踪寄存器 |
+| 没有 invariant / property test | 8 种内置 invariants + 自定义断言 DSL |
+| 没有 fuzz coverage 工具 | 指令级覆盖率追踪 + 语料库变异 |
+| ZK proof 正确性无法验证 | `leo run` + `snarkvm` 双重 ZK 验证 |
+| 纯 CLI，无可视化 | Web Dashboard + SSE 实时流 |
+
+---
+
+## 🖥️ Live Demo
+
+```
+🔗 http://bore.pub:46914
+```
+
+打开浏览器即可体验：配置合约 → 点击 Run Fuzz → 实时 SSE 推送结果 → 图表可视化。
+
+<details>
+<summary>📸 本地运行（点击展开）</summary>
+
 ```bash
-cd leo-zap
+git clone https://github.com/kaylia-builder/aleo-hackathon.git
+cd aleo-hackathon/leo-zap
 cargo build
-# Parse a compiled .aleo file
-cargo run -- parse --file ../token_demo/build/token/token.aleo
-# Fuzz the token contract with 500 iterations
-cargo run -- fuzz --file ../token_demo/build/token/token.aleo --runs 500
-# Fuzz a specific function
-cargo run -- fuzz --file ../token_demo/build/token/token.aleo --function transfer_private --runs 200
-# Reproducible run with fixed seed
-cargo run -- fuzz --file ../token_demo/build/token/token.aleo --runs 100 --seed 42
-# Check invariants with a spec file
-cargo run -- check --file ../token_demo/build/token/token.aleo --spec ../contracts/invariants/token.toml --runs 100 --seed 42
-# Fuzz the bugged contract (all 3 bugs caught!)
-cargo run -- check --file ../contracts/token_bugged/build/token/token.aleo --spec ../contracts/invariants/token_bugged.toml --runs 100 --seed 42
-# Fuzz directly from .leo source (auto-compiles with leo build)
+cargo run -- serve          # 浏览器打开 http://localhost:3000
+```
+</details>
+
+---
+
+## ⚡ Quick Start
+
+```bash
+cd leo-zap && cargo build
+```
+
+```bash
+# ┌─────────────────────────────────────────────────────┐
+# │  PARSE — 解析 .aleo 合约结构                         │
+# └─────────────────────────────────────────────────────┘
+cargo run -- parse --file ../contracts/token_safe/build/token/token.aleo
+
+# ┌─────────────────────────────────────────────────────┐
+# │  FUZZ — 覆盖率引导的随机模糊测试                      │
+# └─────────────────────────────────────────────────────┘
+cargo run -- fuzz --file ../contracts/token_safe/build/token/token.aleo --runs 200
+
+# ┌─────────────────────────────────────────────────────┐
+# │  BUG HUNT — 不变式检查捕获隐私漏洞                   │
+# └─────────────────────────────────────────────────────┘
+cargo run -- check \
+  --file ../contracts/token_bugged/build/token/token.aleo \
+  --spec ../contracts/invariants/token_bugged.toml \
+  --runs 100 --seed 42
+
+# ┌─────────────────────────────────────────────────────┐
+# │  SOURCE — 直接对 .leo 源码 fuzz（自动编译）          │
+# └─────────────────────────────────────────────────────┘
 cargo run -- fuzz --source ../contracts/token_safe --runs 100
-# Run with real ZK proof verification (requires Leo CLI installed)
-cargo run -- fuzz --source ../contracts/token_safe --project-dir ../contracts/token_safe --runs 100
-# Exhaustive ZK verification (verify ALL runs, not just suspicious ones)
-cargo run -- fuzz --source ../contracts/token_safe --project-dir ../contracts/token_safe --verify-all --runs 50
-# Start the web dashboard
+
+# ┌─────────────────────────────────────────────────────┐
+# │  ZK VERIFY — 真实零知识证明验证                       │
+# └─────────────────────────────────────────────────────┘
+cargo run -- fuzz --source ../contracts/token_safe \
+  --project-dir ../contracts/token_safe --runs 50
+
+# ┌─────────────────────────────────────────────────────┐
+# │  WEB UI — 浏览器可视化面板                           │
+# └─────────────────────────────────────────────────────┘
 cargo run -- serve
 ```
 
-## Demo
+---
 
-```bash
-# One-command demo — walks through all features
-bash demo/demo.sh
+## 🏗️ Architecture
 
-# Or run individual steps:
-cd leo-zap
-
-# Parse contract
-cargo run -- parse --file ../contracts/token_safe/build/token/token.aleo
-
-# Fuzz with random inputs
-cargo run -- fuzz --file ../contracts/token_safe/build/token/token.aleo --runs 100
-
-# Check invariants (safe)
-cargo run -- check --file ../contracts/token_safe/build/token/token.aleo --spec ../contracts/invariants/token.toml --runs 100
-
-# Hunt bugs (bugged)
-cargo run -- check --file ../contracts/token_bugged/build/token/token.aleo --spec ../contracts/invariants/token_bugged.toml --runs 100
+```
+┌──────────────────────────────────────────────────────────┐
+│                     🧱 LeoZap Stack                       │
+├──────────────────────────────────────────────────────────┤
+│                                                          │
+│   ┌──────────┐  ┌──────────┐  ┌────────────────────┐   │
+│   │  .aleo   │  │  .leo    │  │   Invariant Spec    │   │
+│   │  Parser  │  │  Builder │  │   TOML DSL          │   │
+│   └────┬─────┘  └────┬─────┘  └─────────┬──────────┘   │
+│        │              │                  │               │
+│        └──────────────┼──────────────────┘               │
+│                       ▼                                  │
+│   ┌─────────────────────────────────────────────┐       │
+│   │           🎲 Fuzz Engine                     │       │
+│   │  ┌─────────────┐  ┌──────────────────────┐  │       │
+│   │  │  Random     │  │  Coverage-Guided     │  │       │
+│   │  │  Generator  │  │  Corpus Mutation     │  │       │
+│   │  └──────┬──────┘  └──────────┬───────────┘  │       │
+│   │         │                    │               │       │
+│   │         └────────┬───────────┘               │       │
+│   │                  ▼                           │       │
+│   │  ┌─────────────────────────────────────┐    │       │
+│   │  │   Symbolic Executor                 │    │       │
+│   │  │   add · sub · cast · gt · assert    │    │       │
+│   │  │   async · output · field-access     │    │       │
+│   │  └─────────────────────────────────────┘    │       │
+│   └─────────────────────┬───────────────────────┘       │
+│                         ▼                                │
+│   ┌─────────────────────────────────────────────┐       │
+│   │         🔍 Invariant Checker                 │       │
+│   │  balance · owner · overflow · zero-amount    │       │
+│   │  self-transfer · record-consumption ·        │       │
+│   │  private-param-usage · custom-assertions     │       │
+│   └─────────────────────┬───────────────────────┘       │
+│                         ▼                                │
+│   ┌─────────────────────────────────────────────┐       │
+│   │         🔐 ZK Verification                   │       │
+│   │  ┌──────────┐  ┌───────────────────────┐    │       │
+│   │  │ leo run  │  │  snarkvm verify       │    │       │
+│   │  │ (proof)  │  │  (independent check)  │    │       │
+│   │  └──────────┘  └───────────────────────┘    │       │
+│   └─────────────────────┬───────────────────────┘       │
+│                         ▼                                │
+│   ┌─────────────────────────────────────────────┐       │
+│   │  📊 Report {                                 │       │
+│   │    passed, violations,                        │       │
+│   │    zk_mismatches, coverage_pct,               │       │
+│   │    violation_results[]                        │       │
+│   │  }                                            │       │
+│   └─────────────────────┬───────────────────────┘       │
+│                         ▼                                │
+│   ┌──────────┐  ┌──────────────────────────────┐       │
+│   │  CLI     │  │  🌐 Web Dashboard             │       │
+│   │  output  │  │  axum + SSE + Chart.js        │       │
+│   └──────────┘  └──────────────────────────────┘       │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
 ```
 
-## Structure
-- `token_demo/` - 已跑通的官方 token 合约（含 4 个 4.3.4 兼容坑修复）
-- `contracts/` - 多版本测试合约
-  - `token_safe/` - 安全版 baseline
-  - `token_bugged/` - 故意埋 bug 版（fuzzer 靶子）
-  - `invariants/` - 不变式规范文件
-- `leo-zap/` - LeoZap 工具源码（Rust）
-- `docs/` - 设计文档
-- `demo/` - Demo Day 材料
+---
 
-## Status
-- [x] 环境就绪 (Ubuntu 26.04 + Leo 4.3.4)
-- [x] token 合约跑通
-- [x] 项目骨架初始化
-- [x] .aleo parser 实现 (770 行, 11 tests)
-- [x] fuzzer 引擎 (符号执行 + 随机输入生成, 37 tests)
-- [x] invariant checker (spec 文件解析 + 自定义断言, 76 tests)
-- [x] bugged 合约 (token_bugged/ — 3 deliberate bugs, all caught)
-- [x] Demo (demo/demo.sh — 一键演示脚本)
-- [x] **ZK Proof 真实验证** (leo_runner / --project-dir / --verify-all)
+## 📐 Invariant Spec DSL
 
-## License
-MIT
+TOML 格式的声明式不变式规范语言，支持全局默认 + 按函数覆盖 + 自定义断言。
+
+```toml
+[contract]
+name = "token.aleo"
+
+# 全局默认
+[invariants.default]
+balance_conservation = true    # 非铸币操作保持余额守恒
+owner_integrity = true         # output record 的 owner 字段有效
+overflow_check = true          # 无符号整数溢出检查
+record_consumption = true      # 输入 record 被消费（防双花）
+private_param_usage = false    # 标记未使用的 .private 参数
+
+# 按函数覆盖（mint 创建代币，不适用余额守恒）
+[invariants.functions.mint_private]
+balance_conservation = false
+
+# 自定义断言
+[[assertions]]
+type = "amount_conserved"           # 输入总额 == 输出总额
+function = "transfer_private"
+description = "代币转移必须守恒"
+
+[[assertions]]
+type = "range_check"                # 数额在 [min, max] 范围
+function = "transfer_private"
+field = "amount"
+min = 1
+
+[[assertions]]
+type = "no_field_none"              # 字段不能为空
+function = "mint_private"
+field = "owner"
+```
+
+---
+
+## 🐛 Bug Detection Demo
+
+Token 合约中故意植入 3 个 Bug，LeoZap 全部捕获：
+
+| Bug | 位置 | 类型 | 检测方式 |
+|-----|------|------|----------|
+| 🐛 #1 | `transfer_private` 用 `+` 代替 `-` | 通胀漏洞 | `overflow_check` + `balance_conservation` |
+| 🐛 #2 | `mint_private` 漏掉 `amount` 字段 | 字段缺失 | `field_set` 自定义断言 |
+| 🐛 #3 | `transfer_private` 跳过扣款 | 双花 | `amount_conserved` 自定义断言 |
+
+```
+$ cargo run -- check --file token_bugged.aleo --spec token_bugged.toml --runs 100
+
+  FAIL mint_private: 0/17 (0%)        ← Bug #2 命中
+  FAIL transfer_private: 0/17 (0%)    ← Bug #1 & #3 命中
+
+Result: 54 passed, 46 violations (3/3 bugs caught)
+```
+
+---
+
+## 🌍 Ecosystem Comparison
+
+| 功能 | LeoZap 🧱 | Foundry (Solidity) | Move Prover | Echidna |
+|------|-----------|-------------------|-------------|---------|
+| 随机输入生成 | ✅ coverage-guided | ✅ | ❌ | ✅ |
+| 符号执行 | ✅ Aleo IR | ❌ | ✅ (Move IR) | ❌ |
+| 不变量检查 | ✅ 8 种 + DSL | ✅ | ✅ | ✅ |
+| ZK Proof 验证 | ✅ leo + snarkvm | ❌ | ❌ | ❌ |
+| 隐私专项 invariant | ✅ record/private | ❌ | ❌ | ❌ |
+| Web Dashboard | ✅ SSE real-time | ❌ | ❌ | ❌ |
+| Spec 语言 | TOML DSL | Solidity inline | Move spec lang | Solidity inline |
+| 代码覆盖率 | ✅ 指令级 | ✅ | ❌ | ✅ |
+
+---
+
+## 📁 Project Structure
+
+```
+aleo-hackathon/
+├── leo-zap/                  # 🦀 Rust 工具源码
+│   └── src/
+│       ├── parser.rs         # .aleo 指令解析器
+│       ├── generator.rs      # 随机输入生成 + 语料库变异
+│       ├── fuzzer.rs         # 符号执行引擎 + Coverage Tracker
+│       ├── invariants.rs     # 8 种不变式检查器
+│       ├── spec.rs           # Invariant Spec TOML DSL
+│       ├── leo_runner.rs     # leo run + snarkvm ZK 验证
+│       ├── leo_compiler.rs   # leo build 自动编译
+│       ├── web.rs            # axum HTTP server + SSE
+│       ├── web_templates.rs  # 内嵌 Dashboard HTML/CSS/JS
+│       └── main.rs           # CLI (clap)
+├── contracts/                # 📜 Leo 合约
+│   ├── token_safe/           # 安全版 token
+│   ├── token_bugged/         # 3-bug 版 token
+│   ├── private_voting/       # 隐私投票（safe）
+│   ├── private_voting_bugged/# 隐私投票（bugged）
+│   └── invariants/           # Spec 文件
+├── token_demo/               # 官方 token demo
+├── demo/                     # demo.sh 一键脚本
+└── docs/                     # 设计文档
+```
+
+---
+
+## 🧪 Tests
+
+```
+$ cargo test
+running 85 tests
+test result: ok. 85 passed; 0 failed; 0 ignored
+```
+
+---
+
+## 🛠️ Tech Stack
+
+| 层 | 技术 |
+|----|------|
+| 语言 | Rust 2021 |
+| CLI | clap 4 |
+| Web 框架 | axum 0.7 + tokio |
+| 实时推送 | Server-Sent Events |
+| 序列化 | serde + serde_json |
+| 图表 | Chart.js 4 |
+| ZK 验证 | `leo run` + `snarkvm` CLI |
+| 模板 | 内嵌 HTML/CSS/JS |
+
+---
+
+## 📄 License
+
+MIT © 2026
