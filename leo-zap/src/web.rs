@@ -15,9 +15,9 @@ use crate::parser;
 use crate::spec;
 use crate::web_templates::DASHBOARD_HTML;
 use axum::{
-    extract::{Path, State},
+    extract::{Multipart, Path, State},
     response::{sse::{Event, Sse}, Json},
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -202,6 +202,57 @@ async fn fuzz_report(
             "Run not found or already cleaned up. Reports are delivered via SSE.".to_string(),
         ))
     }
+}
+
+/// `POST /api/upload` — upload a .aleo or .leo file for fuzzing
+async fn upload_file(
+    mut multipart: Multipart,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, String)> {
+    let upload_dir = std::path::PathBuf::from("/tmp/leozap-uploads");
+    std::fs::create_dir_all(&upload_dir).map_err(|e| {
+        (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("mkdir: {}", e))
+    })?;
+
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        (axum::http::StatusCode::BAD_REQUEST, format!("multipart error: {}", e))
+    })? {
+        let filename = field.file_name().unwrap_or("upload.aleo").to_string();
+        let data = field.bytes().await.map_err(|e| {
+            (axum::http::StatusCode::BAD_REQUEST, format!("read error: {}", e))
+        })?;
+
+        // Sanitize filename
+        let safe_name = filename.replace(['/', '\\', ' '], "_");
+        let dest = upload_dir.join(&safe_name);
+        std::fs::write(&dest, &data).map_err(|e| {
+            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("write: {}", e))
+        })?;
+
+        let path_str = dest.to_string_lossy().to_string();
+        let is_leo = safe_name.ends_with(".leo");
+
+        // If it's a .leo source file, try to compile
+        if is_leo {
+            // Assume it's a single .leo file — wrap in a minimal project
+            // For simplicity, just return the path and let the fuzz engine handle it
+            return Ok(Json(serde_json::json!({
+                "ok": true,
+                "path": path_str,
+                "filename": safe_name,
+                "size": data.len(),
+                "note": ".leo source uploaded — use as file_path or create a Leo project"
+            })));
+        }
+
+        return Ok(Json(serde_json::json!({
+            "ok": true,
+            "path": path_str,
+            "filename": safe_name,
+            "size": data.len(),
+        })));
+    }
+
+    Err((axum::http::StatusCode::BAD_REQUEST, "no file uploaded".to_string()))
 }
 
 // ============================================================================
@@ -544,7 +595,8 @@ pub async fn start_server(port: u16) -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/", get(serve_dashboard))
-        .route("/api/fuzz", axum::routing::post(start_fuzz))
+        .route("/api/upload", post(upload_file))
+        .route("/api/fuzz", post(start_fuzz))
         .route("/api/fuzz/:id/events", get(fuzz_events))
         .route("/api/fuzz/:id/report", get(fuzz_report))
         .layer(tower_http::cors::CorsLayer::permissive())

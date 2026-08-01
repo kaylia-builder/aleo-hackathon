@@ -145,9 +145,25 @@ pub const DASHBOARD_HTML: &str = r##"<!DOCTYPE html>
 </header>
 
 <form id="fuzz-form">
+  <!-- Drag & Drop Upload Zone -->
+  <div class="form-full" id="drop-zone" style="
+    border: 2px dashed var(--border); border-radius: 8px; padding: 20px;
+    text-align: center; cursor: pointer; transition: 0.2s; margin-bottom: 4px;
+    background: var(--bg);
+  ">
+    <div style="font-size: 28px; margin-bottom: 4px;">📂</div>
+    <div style="font-size: 14px; color: var(--text);">
+      <b>Drag & Drop</b> your .aleo or .leo file here
+    </div>
+    <div style="font-size: 11px; color: var(--dim); margin-top: 2px;">
+      or click to browse — auto-uploaded to server
+    </div>
+    <input type="file" id="file-upload" accept=".aleo,.leo" style="display:none">
+    <div id="upload-status" style="font-size: 12px; margin-top: 6px;"></div>
+  </div>
   <div>
-    <label>.aleo File</label>
-    <input type="text" id="file-path" value="contracts/token_safe/build/token/token.aleo" required>
+    <label>.aleo File (path or uploaded)</label>
+    <input type="text" id="file-path" value="" placeholder="Paste path or upload a file above" required>
   </div>
   <div>
     <label>OR: Leo Source Dir (auto-build)</label>
@@ -477,6 +493,58 @@ pub const DASHBOARD_HTML: &str = r##"<!DOCTYPE html>
       $('btn-run').disabled = false;
       $('btn-stop').style.display = 'none';
       console.error('Fuzz request failed:', err);
+    }
+  });
+
+  // ── File Upload (drag & drop) ──────────────────────
+  const dropZone = $('drop-zone');
+  const fileInput = $('file-upload');
+  const filePathInput = $('file-path');
+  const uploadStatus = $('upload-status');
+
+  function uploadFile(file) {
+    uploadStatus.innerHTML = '<span style="color:var(--yellow)">⏳ Uploading...</span>';
+    const formData = new FormData();
+    formData.append('file', file);
+    fetch('/api/upload', { method: 'POST', body: formData })
+      .then(r => r.json())
+      .then(data => {
+        if (data.ok) {
+          filePathInput.value = data.path;
+          uploadStatus.innerHTML = '<span style="color:var(--green)">✅ ' + data.filename + ' (' + (data.size/1024).toFixed(1) + ' KB)</span>';
+          if (data.note) uploadStatus.innerHTML += '<br><span style="color:var(--dim);font-size:11px">' + data.note + '</span>';
+        }
+      })
+      .catch(err => {
+        uploadStatus.innerHTML = '<span style="color:var(--red)">❌ Upload failed</span>';
+        console.error(err);
+      });
+  }
+
+  // Click to browse
+  dropZone.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files.length > 0) uploadFile(fileInput.files[0]);
+  });
+
+  // Drag events
+  ['dragenter','dragover'].forEach(e => dropZone.addEventListener(e, ev => {
+    ev.preventDefault();
+    dropZone.style.borderColor = 'var(--accent)';
+    dropZone.style.background = '#0a2a1a';
+  }));
+  ['dragleave','drop'].forEach(e => dropZone.addEventListener(e, ev => {
+    ev.preventDefault();
+    dropZone.style.borderColor = 'var(--border)';
+    dropZone.style.background = 'var(--bg)';
+  }));
+  dropZone.addEventListener('drop', ev => {
+    ev.preventDefault();
+    const file = ev.dataTransfer.files[0];
+    if (file && (file.name.endsWith('.aleo') || file.name.endsWith('.leo'))) {
+      uploadFile(file);
+    } else {
+      uploadStatus.innerHTML = '<span style="color:var(--red)">❌ Only .aleo or .leo files</span>';
     }
   });
 

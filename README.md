@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="http://bore.pub:48973"><b>🖥️ Live Demo</b></a> &nbsp;·&nbsp;
+  <a href="http://bore.pub:5086"><b>🖥️ Live Demo</b></a> &nbsp;·&nbsp;
   <a href="#-quick-start"><b>⚡ Quick Start</b></a> &nbsp;·&nbsp;
   <a href="#-architecture"><b>🏗️ Architecture</b></a> &nbsp;·&nbsp;
   <a href="#-invariant-spec-dsl"><b>📐 Spec DSL</b></a> &nbsp;·&nbsp;
