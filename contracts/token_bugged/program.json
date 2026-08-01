@@ -1,0 +1,10 @@
+{
+  "program": "token.aleo",
+  "version": "0.0.0",
+  "description": "A token contract with privacy-preserving transfers",
+  "development": {
+    "private_key": null,
+    "address": null
+  },
+  "license": "MIT"
+}

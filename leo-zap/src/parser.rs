@@ -167,7 +167,7 @@ impl<'a> Parser<'a> {
     }
 
     /// 判断一行是否是块的开头
-    fn is_block_header(line: &str) -> bool {
+    pub fn is_block_header(line: &str) -> bool {
         line.starts_with("record ")
             || line.starts_with("mapping ")
             || line.starts_with("function ")

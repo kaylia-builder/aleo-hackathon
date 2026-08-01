@@ -1,0 +1,87 @@
+# LeoZap Invariant Spec for token.aleo
+#
+# This file defines which invariants to check for each function in the token contract.
+# Use with: leo-zap check --file token.aleo --spec contracts/invariants/token.toml
+
+[contract]
+name = "token.aleo"
+
+# --------------------------------------------------------------------------
+# Default invariant settings for all functions
+# --------------------------------------------------------------------------
+
+[invariants.default]
+# Safety invariants (default: on)
+balance_conservation = true   # total token supply preserved across non-mint ops
+owner_integrity = true         # output records have valid owner fields
+overflow_check = true          # no unsigned overflow in arithmetic
+
+# Informational invariants (default: off — reduce noise)
+zero_amount = false            # flag zero-amount transfers
+self_transfer = false          # flag self-transfers (sender == receiver)
+
+# --------------------------------------------------------------------------
+# Per-function overrides
+# --------------------------------------------------------------------------
+
+# Mint functions CREATE new tokens — balance_conservation does NOT apply
+[invariants.functions.mint_public]
+balance_conservation = false
+
+[invariants.functions.mint_private]
+balance_conservation = false
+
+# Transfer functions should preserve balance
+[invariants.functions.transfer_private]
+balance_conservation = true
+zero_amount = true             # zero-amount transfers could be bugs
+
+[invariants.functions.transfer_public]
+balance_conservation = true
+zero_amount = true
+
+[invariants.functions.transfer_private_to_public]
+balance_conservation = true
+
+[invariants.functions.transfer_public_to_private]
+balance_conservation = true
+
+# --------------------------------------------------------------------------
+# Custom Assertions
+# --------------------------------------------------------------------------
+
+# transfer_private: amount must be conserved
+[[assertions]]
+type = "amount_conserved"
+function = "transfer_private"
+description = "Total token amount must be identical across inputs and outputs"
+
+# transfer_private: all output records must have valid owners
+[[assertions]]
+type = "no_field_none"
+function = "transfer_private"
+field = "owner"
+description = "Output records must carry a valid owner address"
+
+# transfer_private: transfer amount must be positive
+[[assertions]]
+type = "range_check"
+function = "transfer_private"
+field = "amount"
+min = 1
+description = "Transfer amount must be strictly positive"
+
+# mint_private: generated record must have amount field set
+[[assertions]]
+type = "field_set"
+function = "mint_private"
+field = "amount"
+description = "Minted records must define an amount field"
+
+# mint_private: minted amount should be positive
+[[assertions]]
+type = "range_check"
+function = "mint_private"
+field = "amount"
+min = 1
+description = "Minted amount must be strictly positive"

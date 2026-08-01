@@ -1,0 +1,88 @@
+# LeoZap Invariant Spec for token_bugged.aleo
+#
+# This spec targets the deliberately buggy token contract.
+# It enables ALL invariants and custom assertions to maximize bug detection.
+#
+# Expected bugs caught:
+#   Bug #1: transfer_private uses ADD instead of SUB → OVERFLOW + BALANCE_MISMATCH
+#   Bug #2: mint_private cast has no owner field → FIELD_NOT_SET
+#   Bug #3: transfer_private skips deduction → AMOUNT_NOT_CONSERVED
+
+[contract]
+name = "token.aleo"
+
+# Enable ALL invariants aggressively
+[invariants.default]
+balance_conservation = true
+owner_integrity = true
+zero_amount = true
+self_transfer = true
+overflow_check = true
+
+# Mint functions CREATE new tokens — balance conservation does NOT apply
+[invariants.functions.mint_public]
+balance_conservation = false
+
+[invariants.functions.mint_private]
+balance_conservation = false
+
+# Transfer functions: enable everything
+[invariants.functions.transfer_private]
+balance_conservation = true
+zero_amount = true
+
+[invariants.functions.transfer_public]
+balance_conservation = true
+zero_amount = true
+
+[invariants.functions.transfer_private_to_public]
+balance_conservation = true
+
+[invariants.functions.transfer_public_to_private]
+balance_conservation = true
+
+# --------------------------------------------------------------------------
+# Custom Assertions — designed to catch specific bugs
+# --------------------------------------------------------------------------
+
+# Bug #1 & #3: transfer_private should conserve amounts
+[[assertions]]
+type = "amount_conserved"
+function = "transfer_private"
+description = "BUG CHECK #1/#3: Transfer must preserve total token amount"
+
+# Bug #2: mint_private must set the amount field
+[[assertions]]
+type = "field_set"
+function = "mint_private"
+field = "amount"
+description = "BUG CHECK #2: Minted record must have an amount field"
+
+# Bug #2: mint_private records need valid owners
+[[assertions]]
+type = "no_field_none"
+function = "mint_private"
+field = "owner"
+description = "BUG CHECK #2: Minted record must have a valid owner"
+
+# Bug #1: transfer_private amount should be positive (overflow creates huge values)
+[[assertions]]
+type = "range_check"
+function = "transfer_private"
+field = "amount"
+min = 1
+description = "Transfer amount sanity check"
+
+[[assertions]]
+type = "range_check"
+function = "transfer_private_to_public"
+field = "amount"
+min = 1
+description = "Transfer amount must be positive"
+
+[[assertions]]
+type = "range_check"
+function = "mint_private"
+field = "amount"
+min = 1
+description = "Minted amount must be positive"
