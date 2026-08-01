@@ -8,6 +8,7 @@
 //! 2. **Symbolic Executor**: tracks register values through instruction sequences
 //! 3. **Violation Detector**: checks for underflows, balance mismatches, and other bugs
 //! 4. **FuzzRunner**: orchestrates input generation + symbolic execution across N iterations
+//! 5. **ZK Verifier**: 对涉及 record 隐私操作的路径调用 leo run 真实生成 ZK proof
 //!
 //! ## Instruction Support
 //!
@@ -21,6 +22,15 @@ use crate::parser::{Contract, FunctionDef};
 use crate::spec::InvariantSpec;
 use colored::*;
 use std::collections::HashMap;
+
+/// ZK 验证统计（fuzz_function 内部用）
+#[derive(Default)]
+struct ZkStats {
+    verifications: u32,
+    proofs_generated: u32,
+    mismatches: u32,
+    mismatch_details: Vec<crate::leo_runner::VerificationMismatch>,
+}
 
 // ============================================================================
 // Instruction Types
@@ -124,6 +134,11 @@ pub struct FuzzConfig {
     pub include_edge_cases: bool,
     /// Optional invariant spec for targeted checking
     pub spec: Option<InvariantSpec>,
+    /// Leo 项目根目录（含 program.json），用于 leo run 真实验证
+    /// None = 不做 ZK 验证（纯符号执行模式）
+    pub project_dir: Option<std::path::PathBuf>,
+    /// 是否对每个 run 都做 ZK 验证（默认 false，只对可疑做验证）
+    pub verify_all_with_leo: bool,
 }
 
 impl Default for FuzzConfig {
@@ -134,6 +149,8 @@ impl Default for FuzzConfig {
             function_filter: None,
             include_edge_cases: true,
             spec: None,
+            project_dir: None,
+            verify_all_with_leo: false,
         }
     }
 }
@@ -189,6 +206,14 @@ pub struct FuzzReport {
     pub per_function: Vec<(String, u32, u32, u32)>,
     /// All violation results
     pub violation_results: Vec<FuzzResult>,
+    /// 调用 leo run 做真实验证的次数
+    pub zk_verifications: u32,
+    /// ZK proof 生成成功的次数
+    pub zk_proofs_generated: u32,
+    /// 符号执行和 ZK 验证结果不一致的次数（真实 bug）
+    pub zk_mismatches: u32,
+    /// ZK 验证失败的详情
+    pub zk_mismatch_details: Vec<crate::leo_runner::VerificationMismatch>,
 }
 
 // ============================================================================
@@ -227,7 +252,6 @@ pub fn parse_instruction(line: &str) -> Option<Instruction> {
 
 /// Parse `add rA rB into rC` or `sub rA rB into rC` or `gt rA rB into rC`
 fn parse_binary_op(op: &str, tokens: &[&str]) -> Option<Instruction> {
-    // tokens: [op, lhs, rhs, "into", dest]
     if tokens.len() < 5 || tokens[3] != "into" {
         return Some(Instruction::Unknown(tokens.join(" ")));
     }
@@ -245,7 +269,6 @@ fn parse_binary_op(op: &str, tokens: &[&str]) -> Option<Instruction> {
 
 /// Parse `cast rA rB ... into rC as token.record`
 fn parse_cast(tokens: &[&str]) -> Option<Instruction> {
-    // tokens: ["cast", fields..., "into", dest, "as", type]
     let into_pos = tokens.iter().position(|&t| t == "into")?;
     let as_pos = tokens.iter().position(|&t| t == "as")?;
 
@@ -265,12 +288,10 @@ fn parse_cast(tokens: &[&str]) -> Option<Instruction> {
 
 /// Parse `get.or_use mapping[key] default into rC`
 fn parse_get_or_use(tokens: &[&str]) -> Option<Instruction> {
-    // tokens: ["get.or_use", "mapping[key]", default, "into", dest]
     if tokens.len() < 5 || tokens[tokens.len() - 2] != "into" {
         return Some(Instruction::Unknown(tokens.join(" ")));
     }
 
-    // Parse "mapping[key]" — extract mapping name and key
     let mapping_key = tokens[1];
     let (mapping, key) = if let Some(bracket_pos) = mapping_key.find('[') {
         let m = &mapping_key[..bracket_pos];
@@ -293,7 +314,6 @@ fn parse_get_or_use(tokens: &[&str]) -> Option<Instruction> {
 
 /// Parse `set rA into mapping[key]`
 fn parse_set(tokens: &[&str]) -> Option<Instruction> {
-    // tokens: ["set", value, "into", "mapping[key]"]
     if tokens.len() < 4 || tokens[2] != "into" {
         return Some(Instruction::Unknown(tokens.join(" ")));
     }
@@ -317,7 +337,6 @@ fn parse_set(tokens: &[&str]) -> Option<Instruction> {
 
 /// Parse `async func args... into rC`
 fn parse_async(tokens: &[&str]) -> Option<Instruction> {
-    // tokens: ["async", func_name, args..., "into", dest]
     let into_pos = tokens.iter().position(|&t| t == "into")?;
 
     let func = tokens[1].to_string();
@@ -351,7 +370,6 @@ fn parse_assert_neq(tokens: &[&str]) -> Option<Instruction> {
 
 /// Parse `output rA as type`
 fn parse_output(tokens: &[&str]) -> Option<Instruction> {
-    // tokens: ["output", src, "as", type...]
     if tokens.len() < 4 || tokens[2] != "as" {
         return Some(Instruction::Unknown(tokens.join(" ")));
     }
@@ -456,7 +474,6 @@ pub fn parse_literal(s: &str) -> Option<SymValue> {
         ));
     }
 
-    // "0u64" → U64(0)
     if s.ends_with("u64") {
         let num: u64 = s.trim_end_matches("u64").parse().ok()?;
         return Some(SymValue::U64(num));
@@ -493,7 +510,6 @@ pub fn parse_literal(s: &str) -> Option<SymValue> {
         let num: i8 = s.trim_end_matches("i8").parse().ok()?;
         return Some(SymValue::I8(num));
     }
-    // "0group" or "0u64" (double check) or "true"/"false"
     if s == "true" {
         return Some(SymValue::Bool(true));
     }
@@ -522,7 +538,6 @@ pub fn execute_instruction(
 
     match inst {
         Instruction::Add { lhs, rhs, dest } => {
-            // Resolve operands
             let lhs_val = state.resolve(lhs);
             let rhs_val = state.resolve(rhs);
 
@@ -542,7 +557,6 @@ pub fn execute_instruction(
                     state.set(dest, SymValue::U64(result));
                 }
                 (Some(_a), Some(_b)) => {
-                    // For non-u64 types, set to unknown (we don't track them precisely)
                     state.set(dest, SymValue::Unknown);
                 }
                 (None, _) | (_, None) => {
@@ -557,7 +571,6 @@ pub fn execute_instruction(
 
             match (lhs_val, rhs_val) {
                 (Some(SymValue::U64(a)), Some(SymValue::U64(b))) => {
-                    // Check for underflow
                     if b > a {
                         violations.push(format!(
                             "UNDERFLOW in {}: sub {} {} — {} < {} would underflow u64 (wraps to {})",
@@ -586,20 +599,14 @@ pub fn execute_instruction(
             dest,
             as_type,
         } => {
-            // Resolve field values
             let mut record_fields = HashMap::new();
 
-            // The cast instruction maps positioned operands to record fields
-            // We need the record definition to map field names
-            // For now, assign generic field names based on the type
             let type_name = as_type
                 .trim_end_matches(".record")
                 .trim_end_matches(&format!(".aleo/{}", as_type));
 
-            // Try to resolve fields
             for (i, field_op) in fields.iter().enumerate() {
                 if let Some(val) = state.resolve(field_op) {
-                    // Use generic field names if we can't infer them
                     let field_name = match i {
                         0 => "owner",
                         1 => "amount",
@@ -631,7 +638,6 @@ pub fn execute_instruction(
         }
 
         Instruction::GetOrUse { default, dest, .. } => {
-            // Symbolic: treat the mapping read as returning the default value
             if let Some(val) = parse_literal(default) {
                 state.set(dest, val);
             } else {
@@ -644,7 +650,6 @@ pub fn execute_instruction(
         }
 
         Instruction::Async { dest, .. } => {
-            // Symbolic: set destination to a Future marker
             state.set(dest, SymValue::Future("future".to_string()));
         }
 
@@ -736,6 +741,10 @@ impl FuzzRunner {
             errors: 0,
             per_function: Vec::new(),
             violation_results: Vec::new(),
+            zk_verifications: 0,
+            zk_proofs_generated: 0,
+            zk_mismatches: 0,
+            zk_mismatch_details: Vec::new(),
         };
 
         // Determine which functions to fuzz
@@ -760,7 +769,7 @@ impl FuzzRunner {
             let extra = if (i as u32) < remainder { 1 } else { 0 };
             let func_runs = runs_per_func + extra;
 
-            let (func_passed, func_violations, func_errors, func_results) =
+            let (func_passed, func_violations, func_errors, func_results, zk_stats) =
                 self.fuzz_function(func, func_runs, &mut gen);
 
             report.total_runs += func_runs;
@@ -771,6 +780,12 @@ impl FuzzRunner {
                 .per_function
                 .push((func.name.clone(), func_runs, func_passed, func_violations));
             report.violation_results.extend(func_results);
+
+            // 累加 ZK 统计
+            report.zk_verifications += zk_stats.verifications;
+            report.zk_proofs_generated += zk_stats.proofs_generated;
+            report.zk_mismatches += zk_stats.mismatches;
+            report.zk_mismatch_details.extend(zk_stats.mismatch_details);
         }
 
         report
@@ -782,25 +797,30 @@ impl FuzzRunner {
         func: &FunctionDef,
         runs: u32,
         gen: &mut InputGenerator,
-    ) -> (u32, u32, u32, Vec<FuzzResult>) {
+    ) -> (u32, u32, u32, Vec<FuzzResult>, ZkStats) {
         let mut passed = 0u32;
         let mut violations = 0u32;
         let errors = 0u32;
         let mut violation_results = Vec::new();
+        let mut zk_stats = ZkStats::default();
+
+        // 检查函数是否涉及 record 操作（隐私路径）
+        let involves_record = func.inputs.iter().any(|p| p.ty.contains("record"))
+            || func.outputs.iter().any(|p| p.ty.contains("record"));
 
         for _ in 0..runs {
-            // Generate random inputs
+            // 生成随机输入
             let inputs = gen.generate_inputs(func, &self.contract.records);
             let input_strings: Vec<String> =
                 inputs.iter().map(|(_, v)| v.to_leo_string()).collect();
 
-            // Parse function body instructions from raw content
+            // 解析函数体指令
             let body_instructions = FuzzRunner::extract_instructions_from_content(
                 &self.raw_content,
                 &func.name,
             );
 
-            // Execute symbolically
+            // 阶段 1：符号执行
             let mut state = SymbolicState::with_inputs(inputs.clone());
             let mut all_violations = Vec::new();
 
@@ -810,14 +830,65 @@ impl FuzzRunner {
                 all_violations.extend(inst_violations);
             }
 
-            // Check additional invariants on the final state
+            // 检查额外不变式
             if let Some(inv_violations) =
                 invariants::check_function_invariants(func, &state, &self.contract, self.config.spec.as_ref())
             {
                 all_violations.extend(inv_violations);
             }
 
-            if all_violations.is_empty() {
+            let symbolic_pass = all_violations.is_empty();
+
+            // 阶段 2：ZK 验证（只在特定条件触发）
+            let should_verify_with_leo = self.config.project_dir.is_some() && (
+                self.config.verify_all_with_leo
+                || !symbolic_pass
+                || involves_record
+            );
+
+            if should_verify_with_leo {
+                if let Some(project_dir) = &self.config.project_dir {
+                    if let Some(leo_result) = crate::leo_runner::run_leo_function(
+                        project_dir,
+                        &func.name,
+                        &input_strings,
+                    ) {
+                        zk_stats.verifications += 1;
+                        if leo_result.proof_generated {
+                            zk_stats.proofs_generated += 1;
+                        }
+
+                        // 对比符号执行和真实 ZK 结果
+                        let mismatches = crate::leo_runner::compare_results(
+                            symbolic_pass,
+                            &all_violations,
+                            &leo_result,
+                        );
+                        if !mismatches.is_empty() {
+                            zk_stats.mismatches += 1;
+                            zk_stats.mismatch_details.extend(mismatches.clone());
+
+                            // 把 mismatch 加到 violation_results
+                            for m in &mismatches {
+                                violation_results.push(FuzzResult {
+                                    function: func.name.clone(),
+                                    inputs: inputs.clone(),
+                                    input_strings: input_strings.clone(),
+                                    outcome: FuzzOutcome::Violation {
+                                        invariant: format!("zk_mismatch:{:?}", m.kind),
+                                        detail: m.detail.clone(),
+                                    },
+                                });
+                            }
+                            violations += 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // 记录结果
+            if symbolic_pass {
                 passed += 1;
             } else {
                 violations += 1;
@@ -827,21 +898,17 @@ impl FuzzRunner {
                     inputs: inputs.clone(),
                     input_strings: input_strings.clone(),
                     outcome: FuzzOutcome::Violation {
-                        invariant: "fuzz".to_string(),
+                        invariant: "symbolic".to_string(),
                         detail,
                     },
                 });
             }
         }
 
-        (passed, violations, errors, violation_results)
+        (passed, violations, errors, violation_results, zk_stats)
     }
 
     /// Extract instructions from a function's body.
-    /// This requires re-reading the source lines from the function definition.
-    ///
-    /// For now, we parse the entire .aleo content and extract per-function instructions.
-    /// The parser currently skips instruction lines — we need a full-content pass.
     pub fn extract_instructions_from_content(
         content: &str,
         func_name: &str,
@@ -849,8 +916,6 @@ impl FuzzRunner {
         let mut instructions = Vec::new();
         let mut in_function = false;
 
-        // We're parsing .aleo instruction format (not .leo source)
-        // Functions start with "function name:" and contain instructions until the next block header
         let function_header = format!("function {}:", func_name);
 
         for line in content.lines() {
@@ -859,7 +924,6 @@ impl FuzzRunner {
                 continue;
             }
 
-            // Check if entering our function
             if trimmed.starts_with(&function_header) {
                 in_function = true;
                 continue;
@@ -869,12 +933,10 @@ impl FuzzRunner {
                 continue;
             }
 
-            // Check if we've hit another block header (end of this function)
             if is_block_header(trimmed) {
                 break;
             }
 
-            // Parse the instruction
             if let Some(inst) = parse_instruction(trimmed) {
                 instructions.push(inst);
             }
@@ -947,7 +1009,6 @@ impl FuzzReport {
                 "Violations:".red().bold()
             ));
 
-            // Group by violation type
             let mut underflows = Vec::new();
             let mut overflows = Vec::new();
             let mut others = Vec::new();
@@ -964,7 +1025,6 @@ impl FuzzReport {
                 }
             }
 
-            // Show a few specific examples (up to 5)
             let all_violations: Vec<&(&FuzzResult, &String)> = underflows
                 .iter()
                 .chain(overflows.iter())
@@ -1008,6 +1068,23 @@ impl FuzzReport {
             ));
         }
 
+        // ZK 验证统计（核心：展示使用了 Aleo 隐私能力）
+        if self.zk_verifications > 0 {
+            out.push_str(&format!("\n{}\n", "Privacy Capability Used:".bold().bright_cyan()));
+            out.push_str(&format!(
+                "  {} ZK proof verifications via leo run\n",
+                self.zk_verifications.to_string().cyan()
+            ));
+            out.push_str(&format!(
+                "  {} ZK proofs generated successfully\n",
+                self.zk_proofs_generated.to_string().green()
+            ));
+            out.push_str(&format!(
+                "  {} Mismatches (symbolic vs ZK) — true bugs\n",
+                self.zk_mismatches.to_string().red()
+            ));
+        }
+
         out
     }
 
@@ -1028,7 +1105,6 @@ impl FuzzReport {
             self.config.seed.to_string().cyan()
         ));
 
-        // Per-function results with active invariants
         for (func_name, runs, passed, violations) in &self.per_function {
             let status = if *violations == 0 {
                 "PASS".green()
@@ -1071,7 +1147,6 @@ impl FuzzReport {
             ));
         }
 
-        // Custom assertions
         if !spec.assertions.is_empty() {
             out.push_str(&format!(
                 "\n{} ({} defined)\n",
@@ -1090,7 +1165,6 @@ impl FuzzReport {
             }
         }
 
-        // Violation details
         if !self.violation_results.is_empty() {
             out.push_str(&format!("\n{}\n", "Violations:".red().bold()));
             for result in self.violation_results.iter().take(10) {
@@ -1112,13 +1186,29 @@ impl FuzzReport {
             }
         }
 
-        // Summary
         out.push_str(&format!(
             "\n{} {} passed, {} violations\n",
             "Result:".bold(),
             format!("{}", self.passed).green(),
             format!("{}", self.violations).red()
         ));
+
+        // ZK 验证统计
+        if self.zk_verifications > 0 {
+            out.push_str(&format!("\n{}\n", "Privacy Capability Used:".bold().bright_cyan()));
+            out.push_str(&format!(
+                "  {} ZK proof verifications via leo run\n",
+                self.zk_verifications.to_string().cyan()
+            ));
+            out.push_str(&format!(
+                "  {} ZK proofs generated successfully\n",
+                self.zk_proofs_generated.to_string().green()
+            ));
+            out.push_str(&format!(
+                "  {} Mismatches (symbolic vs ZK) — true bugs\n",
+                self.zk_mismatches.to_string().red()
+            ));
+        }
 
         out
     }
@@ -1381,17 +1471,15 @@ mod tests {
         let violations = execute_instruction(&inst, &mut state, "test");
         assert_eq!(violations.len(), 1);
         assert!(violations[0].contains("UNDERFLOW"));
-        // Result wraps: 50 - 100 = u64::MAX - 49
         assert_eq!(state.get("r2"), Some(&SymValue::U64(50u64.wrapping_sub(100))));
     }
 
     #[test]
     fn test_symbolic_field_access_sub_underflow() {
-        // Simulate transfer_private where r0.amount < transfer amount
         let mut state = SymbolicState::new();
         let mut fields = HashMap::new();
         fields.insert("owner".to_string(), SymValue::Address("aleo1test".to_string()));
-        fields.insert("amount".to_string(), SymValue::U64(50)); // sender has 50
+        fields.insert("amount".to_string(), SymValue::U64(50));
         state.set(
             "r0",
             SymValue::Record {
@@ -1399,7 +1487,7 @@ mod tests {
                 fields,
             },
         );
-        state.set("r2", SymValue::U64(100)); // trying to transfer 100
+        state.set("r2", SymValue::U64(100));
 
         let inst = Instruction::Sub {
             lhs: Operand::FieldAccess {
@@ -1417,7 +1505,6 @@ mod tests {
 
     #[test]
     fn test_symbolic_cast() {
-        // Simulate: we have a record in r0, and we want to cast r0.owner + r3 into a new record
         let mut state = SymbolicState::new();
         let mut fields = HashMap::new();
         fields.insert("owner".to_string(), SymValue::Address("aleo1owner".to_string()));
@@ -1493,9 +1580,7 @@ function transfer_private:
 
         let insts =
             FuzzRunner::extract_instructions_from_content(content, "transfer_private");
-        // We expect: 3 inputs (as Unknown) + sub + 2 casts + 2 outputs = 8
         assert!(insts.len() >= 6, "Expected at least 6 instructions, got {}", insts.len());
-        // Check that sub is the first recognized non-Unknown instruction
         let recognized: Vec<_> = insts.iter().filter(|i| !matches!(i, Instruction::Unknown(_))).collect();
         assert!(matches!(recognized[0], Instruction::Sub { .. }),
             "First recognized instruction should be Sub");
@@ -1511,6 +1596,10 @@ function transfer_private:
             errors: 0,
             per_function: vec![("mint_private".to_string(), 100, 100, 0)],
             violation_results: vec![],
+            zk_verifications: 0,
+            zk_proofs_generated: 0,
+            zk_mismatches: 0,
+            zk_mismatch_details: vec![],
         };
 
         let output = report.pretty_print();
@@ -1539,11 +1628,38 @@ function transfer_private:
                     detail: "UNDERFLOW in transfer_private: sub r0.amount r2 — 50 < 100 would underflow u64".to_string(),
                 },
             }],
+            zk_verifications: 0,
+            zk_proofs_generated: 0,
+            zk_mismatches: 0,
+            zk_mismatch_details: vec![],
         };
 
         let output = report.pretty_print();
         assert!(output.contains("UNDERFLOW"));
         assert!(output.contains("transfer_private"));
         assert!(output.contains("20 violations"));
+    }
+
+    #[test]
+    fn test_fuzz_report_with_zk_stats() {
+        let report = FuzzReport {
+            config: FuzzConfig::default(),
+            total_runs: 100,
+            passed: 95,
+            violations: 5,
+            errors: 0,
+            per_function: vec![("mint_private".to_string(), 100, 95, 5)],
+            violation_results: vec![],
+            zk_verifications: 50,
+            zk_proofs_generated: 47,
+            zk_mismatches: 3,
+            zk_mismatch_details: vec![],
+        };
+
+        let output = report.pretty_print();
+        assert!(output.contains("Privacy Capability Used"));
+        assert!(output.contains("50 ZK proof verifications"));
+        assert!(output.contains("47 ZK proofs generated"));
+        assert!(output.contains("3 Mismatches"));
     }
 }

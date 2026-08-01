@@ -15,6 +15,7 @@ Aleo 完全没有 property test / fuzz / 覆盖率 / 不变式断言工具（`le
 - 自动生成随机隐私输入（针对 `.private` 字段）
 - 符号执行追踪寄存器值，检测 underflow/overflow/balance mismatch
 - 验证隐私不变式（余额守恒、owner 不变式等）
+- **🆕 真实 ZK Proof 验证**：调用 `leo run` 生成零知识证明，对比符号执行结果与真实 snarkVM 执行，发现隐私语义 bug
 
 ### Quick Start
 ```bash
@@ -32,6 +33,10 @@ cargo run -- fuzz --file ../token_demo/build/token/token.aleo --runs 100 --seed 
 cargo run -- check --file ../token_demo/build/token/token.aleo --spec ../contracts/invariants/token.toml --runs 100 --seed 42
 # Fuzz the bugged contract (all 3 bugs caught!)
 cargo run -- check --file ../contracts/token_bugged/build/token/token.aleo --spec ../contracts/invariants/token_bugged.toml --runs 100 --seed 42
+# Run with real ZK proof verification (requires Leo CLI installed)
+cargo run -- fuzz --file ../contracts/token_safe/build/token/token.aleo --project-dir ../contracts/token_safe --runs 100
+# Exhaustive ZK verification (verify ALL runs, not just suspicious ones)
+cargo run -- fuzz --file ../contracts/token_safe/build/token/token.aleo --project-dir ../contracts/token_safe --verify-all --runs 50
 ```
 
 ## Demo
@@ -75,6 +80,7 @@ cargo run -- check --file ../contracts/token_bugged/build/token/token.aleo --spe
 - [x] invariant checker (spec 文件解析 + 自定义断言, 76 tests)
 - [x] bugged 合约 (token_bugged/ — 3 deliberate bugs, all caught)
 - [x] Demo (demo/demo.sh — 一键演示脚本)
+- [x] **ZK Proof 真实验证** (leo_runner / --project-dir / --verify-all)
 
 ## License
 MIT

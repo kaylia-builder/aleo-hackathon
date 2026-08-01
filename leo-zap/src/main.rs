@@ -3,6 +3,7 @@ mod generator;
 mod fuzzer;
 mod invariants;
 mod spec;
+mod leo_runner;
 
 use clap::{Parser, Subcommand};
 use colored::Colorize;
@@ -47,6 +48,16 @@ enum Commands {
         /// Only fuzz this function (by name)
         #[arg(long)]
         function: Option<String>,
+
+        /// Path to Leo project directory (with program.json) for real ZK proof verification
+        /// When set, leo run is called for suspicious inputs to generate actual ZK proofs
+        #[arg(long, verbatim_doc_comment)]
+        project_dir: Option<PathBuf>,
+
+        /// Verify ALL fuzz runs with leo run (very slow but exhaustive ZK verification)
+        /// Default: only verify suspicious runs (symbolic failures + record-involving functions)
+        #[arg(long, verbatim_doc_comment)]
+        verify_all: bool,
     },
     /// Check invariants defined in a spec file
     Check {
@@ -65,6 +76,16 @@ enum Commands {
         /// Random seed for reproducible runs (0 = random)
         #[arg(short, long, default_value_t = 0)]
         seed: u64,
+
+        /// Path to Leo project directory (with program.json) for real ZK proof verification
+        /// When set, leo run is called for suspicious inputs to generate actual ZK proofs
+        #[arg(long, verbatim_doc_comment)]
+        project_dir: Option<PathBuf>,
+
+        /// Verify ALL fuzz runs with leo run (very slow but exhaustive ZK verification)
+        /// Default: only verify suspicious runs (symbolic failures + record-involving functions)
+        #[arg(long, verbatim_doc_comment)]
+        verify_all: bool,
     },
 }
 
@@ -90,6 +111,8 @@ fn main() -> anyhow::Result<()> {
             runs,
             seed,
             function,
+            project_dir,
+            verify_all,
         } => {
             let content = std::fs::read_to_string(&file)
                 .map_err(|e| anyhow::anyhow!("failed to read {}: {}", file.display(), e))?;
@@ -106,12 +129,28 @@ fn main() -> anyhow::Result<()> {
                 seed
             };
 
+            // Validate project_dir exists if specified
+            if let Some(ref dir) = project_dir {
+                if !dir.exists() {
+                    anyhow::bail!("project directory '{}' does not exist", dir.display());
+                }
+                if !dir.join("program.json").exists() {
+                    eprintln!(
+                        "{} project directory '{}' does not contain program.json — ZK verification may fail",
+                        "warning:".yellow(),
+                        dir.display()
+                    );
+                }
+            }
+
             let config = fuzzer::FuzzConfig {
                 runs,
                 seed,
                 function_filter: function,
                 include_edge_cases: true,
                 spec: None,
+                project_dir,
+                verify_all_with_leo: verify_all,
             };
 
             let runner = fuzzer::FuzzRunner::new(config, contract, content);
@@ -123,6 +162,8 @@ fn main() -> anyhow::Result<()> {
             spec,
             runs,
             seed,
+            project_dir,
+            verify_all,
         } => {
             let content = std::fs::read_to_string(&file)
                 .map_err(|e| anyhow::anyhow!("failed to read {}: {}", file.display(), e))?;
@@ -159,12 +200,28 @@ fn main() -> anyhow::Result<()> {
                 seed
             };
 
+            // Validate project_dir exists if specified
+            if let Some(ref dir) = project_dir {
+                if !dir.exists() {
+                    anyhow::bail!("project directory '{}' does not exist", dir.display());
+                }
+                if !dir.join("program.json").exists() {
+                    eprintln!(
+                        "{} project directory '{}' does not contain program.json — ZK verification may fail",
+                        "warning:".yellow(),
+                        dir.display()
+                    );
+                }
+            }
+
             let config = fuzzer::FuzzConfig {
                 runs,
                 seed,
                 function_filter: None,
                 include_edge_cases: true,
                 spec: Some(invariant_spec.clone()),
+                project_dir,
+                verify_all_with_leo: verify_all,
             };
 
             let runner = fuzzer::FuzzRunner::new(config, contract, content);
