@@ -395,7 +395,7 @@ fn run_fuzz_with_events(
 
             for inst in &body_instructions {
                 let inst_violations =
-                    fuzzer::execute_instruction(inst, &mut state, &func.name);
+                    fuzzer::execute_instruction(inst, &mut state, &func.name, &contract.records);
                 all_violations.extend(inst_violations);
             }
 

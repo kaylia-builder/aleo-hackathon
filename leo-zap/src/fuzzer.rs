@@ -532,11 +532,15 @@ pub fn parse_literal(s: &str) -> Option<SymValue> {
 // Symbolic Executor
 // ============================================================================
 
-/// Execute a single instruction on the state, returning any violations found
+/// Execute a single instruction on the state, returning any violations found.
+///
+/// `records` provides the contract's record definitions for field name resolution
+/// during `cast` operations. Pass `&[]` if unknown.
 pub fn execute_instruction(
     inst: &Instruction,
     state: &mut SymbolicState,
     func_name: &str,
+    records: &[crate::parser::RecordDef],
 ) -> Vec<String> {
     let mut violations = Vec::new();
 
@@ -609,14 +613,26 @@ pub fn execute_instruction(
                 .trim_end_matches(".record")
                 .trim_end_matches(&format!(".aleo/{}", as_type));
 
+            // Look up real field names from the contract's record definition
+            let field_names: Vec<&str> = records
+                .iter()
+                .find(|r| r.name == type_name)
+                .map(|r| r.fields.iter().map(|f| f.name.as_str()).collect())
+                .unwrap_or_default();
+
             for (i, field_op) in fields.iter().enumerate() {
                 if let Some(val) = state.resolve(field_op) {
-                    let field_name = match i {
-                        0 => "owner",
-                        1 => "amount",
-                        _ => "unknown",
+                    let field_name = if i < field_names.len() {
+                        field_names[i].to_string()
+                    } else {
+                        // Fallback: use position-based naming for unknown records
+                        match i {
+                            0 => "owner",
+                            1 => "amount",
+                            _ => "unknown",
+                        }.to_string()
                     };
-                    record_fields.insert(field_name.to_string(), val);
+                    record_fields.insert(field_name, val);
                 }
             }
 
@@ -830,7 +846,7 @@ impl FuzzRunner {
 
             for inst in &body_instructions {
                 let inst_violations =
-                    execute_instruction(inst, &mut state, &func.name);
+                    execute_instruction(inst, &mut state, &func.name, &self.contract.records);
                 all_violations.extend(inst_violations);
             }
 
@@ -1421,7 +1437,7 @@ mod tests {
             dest: "r2".to_string(),
         };
 
-        let violations = execute_instruction(&inst, &mut state, "test");
+        let violations = execute_instruction(&inst, &mut state, "test", &[]);
         assert!(violations.is_empty());
         assert_eq!(state.get("r2"), Some(&SymValue::U64(30)));
     }
@@ -1438,7 +1454,7 @@ mod tests {
             dest: "r2".to_string(),
         };
 
-        let violations = execute_instruction(&inst, &mut state, "test");
+        let violations = execute_instruction(&inst, &mut state, "test", &[]);
         assert_eq!(violations.len(), 1);
         assert!(violations[0].contains("OVERFLOW"));
     }
@@ -1455,7 +1471,7 @@ mod tests {
             dest: "r2".to_string(),
         };
 
-        let violations = execute_instruction(&inst, &mut state, "test");
+        let violations = execute_instruction(&inst, &mut state, "test", &[]);
         assert!(violations.is_empty());
         assert_eq!(state.get("r2"), Some(&SymValue::U64(70)));
     }
@@ -1472,7 +1488,7 @@ mod tests {
             dest: "r2".to_string(),
         };
 
-        let violations = execute_instruction(&inst, &mut state, "test");
+        let violations = execute_instruction(&inst, &mut state, "test", &[]);
         assert_eq!(violations.len(), 1);
         assert!(violations[0].contains("UNDERFLOW"));
         assert_eq!(state.get("r2"), Some(&SymValue::U64(50u64.wrapping_sub(100))));
@@ -1502,7 +1518,7 @@ mod tests {
             dest: "r3".to_string(),
         };
 
-        let violations = execute_instruction(&inst, &mut state, "transfer_private");
+        let violations = execute_instruction(&inst, &mut state, "transfer_private", &[]);
         assert_eq!(violations.len(), 1);
         assert!(violations[0].contains("UNDERFLOW"), "Expected underflow, got: {}", violations[0]);
     }
@@ -1534,7 +1550,7 @@ mod tests {
             as_type: "token.record".to_string(),
         };
 
-        let violations = execute_instruction(&inst, &mut state, "test");
+        let violations = execute_instruction(&inst, &mut state, "test", &[]);
         assert!(violations.is_empty());
 
         let record = state.get("r4").unwrap();
@@ -1558,7 +1574,7 @@ mod tests {
             dest: "r2".to_string(),
         };
 
-        let violations = execute_instruction(&inst, &mut state, "test");
+        let violations = execute_instruction(&inst, &mut state, "test", &[]);
         assert!(violations.is_empty());
         assert_eq!(state.get("r2"), Some(&SymValue::Bool(true)));
     }

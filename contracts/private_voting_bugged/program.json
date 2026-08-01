@@ -1,0 +1,10 @@
+{
+  "program": "private_voting.aleo",
+  "version": "0.0.0",
+  "description": "BUGGED privacy-preserving voting — 3 deliberate bugs for LeoZap to catch",
+  "development": {
+    "private_key": null,
+    "address": null
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,10 @@
+{
+  "program": "private_voting.aleo",
+  "version": "0.0.0",
+  "description": "Privacy-preserving voting system with ZK ballot verification",
+  "development": {
+    "private_key": null,
+    "address": null
+  },
+  "license": "MIT"
+}

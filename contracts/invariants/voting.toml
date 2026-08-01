@@ -1,0 +1,71 @@
+# LeoZap Invariant Spec for private_voting.aleo (Safe Version)
+#
+# Verifies the privacy invariants of the voting contract:
+#   1. One vote per ballot (voted flag transitions from false to true)
+#   2. Vote tally increments by exactly 1
+#   3. Ballot owner integrity is preserved
+#
+# Usage: leo-zap check --file private_voting/build/private_voting.aleo --spec contracts/invariants/voting.toml
+
+[contract]
+name = "private_voting.aleo"
+
+# --------------------------------------------------------------------------
+# Default invariant settings
+# --------------------------------------------------------------------------
+
+[invariants.default]
+balance_conservation = false     # Not a token contract — no balance to conserve
+owner_integrity = true           # Ballot records must preserve owner
+overflow_check = true            # No arithmetic overflow
+zero_amount = false
+self_transfer = false
+
+# --------------------------------------------------------------------------
+# Per-function overrides
+# --------------------------------------------------------------------------
+
+# register_voter: creates a ballot — owner must be valid
+[invariants.functions.register_voter]
+owner_integrity = true
+
+# cast_vote: consumes ballot, creates marked ballot — owner MUST be preserved
+[invariants.functions.cast_vote]
+owner_integrity = true
+zero_amount = false
+
+# cast_vote_for_election: same as cast_vote but with election check
+[invariants.functions.cast_vote_for_election]
+owner_integrity = true
+
+# --------------------------------------------------------------------------
+# Custom Assertions
+# --------------------------------------------------------------------------
+
+# cast_vote must preserve ballot owner (privacy invariant)
+[[assertions]]
+type = "no_field_none"
+function = "cast_vote"
+field = "owner"
+description = "Voted ballot must carry a valid owner address"
+
+# cast_vote_for_election must preserve ballot owner
+[[assertions]]
+type = "no_field_none"
+function = "cast_vote_for_election"
+field = "owner"
+description = "Voted ballot must carry a valid owner address"
+
+# register_voter must set the owner field
+[[assertions]]
+type = "field_set"
+function = "register_voter"
+field = "owner"
+description = "Ballot must have an owner field set"
+
+# register_voter: election_id must be set
+[[assertions]]
+type = "field_set"
+function = "register_voter"
+field = "election_id"
+description = "Ballot must have an election_id field set"

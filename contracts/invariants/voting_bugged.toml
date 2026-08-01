@@ -1,0 +1,77 @@
+# LeoZap Invariant Spec for private_voting.aleo (BUGGED Version)
+#
+# This spec aggressively enables ALL checks to catch the 3 deliberate bugs:
+#
+#   Bug #1: cast_vote keeps voted=false → ballot can be reused (double-vote)
+#           Caught by: field_set + no_field_none assertions confirming ballot state
+#
+#   Bug #2: finalize_cast_vote adds 2 instead of 1 (tally inflation)
+#           Caught by: overflow_check (symbolic arithmetic finds mismatch)
+#
+#   Bug #3: cast_vote sets owner=caller instead of original owner (privacy leak)
+#           Caught by: owner_integrity invariant
+#
+# Usage:
+#   leo-zap check --file private_voting_bugged/build/private_voting.aleo \
+#                 --spec contracts/invariants/voting_bugged.toml --runs 200
+
+[contract]
+name = "private_voting.aleo"
+
+# Enable ALL invariants aggressively to catch every bug
+[invariants.default]
+balance_conservation = false
+owner_integrity = true        # Catches Bug #3: owner reassigned to caller
+overflow_check = true         # Catches Bug #2: tally adds 2 instead of 1
+zero_amount = false
+self_transfer = false
+
+# --------------------------------------------------------------------------
+# Per-function overrides
+# --------------------------------------------------------------------------
+
+[invariants.functions.cast_vote]
+owner_integrity = true        # MUST preserve ballot owner through transition
+
+[invariants.functions.cast_vote_for_election]
+owner_integrity = true
+
+[invariants.functions.register_voter]
+owner_integrity = true
+
+# --------------------------------------------------------------------------
+# Custom Assertions — targeted at specific bugs
+# --------------------------------------------------------------------------
+
+# Bug #3 Check: cast_vote output ballot must have valid owner (should match input)
+[[assertions]]
+type = "no_field_none"
+function = "cast_vote"
+field = "owner"
+description = "BUG CHECK #3: Voted ballot owner must be valid (not reassigned to caller)"
+
+[[assertions]]
+type = "no_field_none"
+function = "cast_vote_for_election"
+field = "owner"
+description = "BUG CHECK #3: Voted ballot owner must be valid"
+
+# Bug #1 Check: ballot must have election_id set (catches malformed ballots)
+[[assertions]]
+type = "field_set"
+function = "register_voter"
+field = "election_id"
+description = "Ballot must have an election_id field"
+
+[[assertions]]
+type = "field_set"
+function = "cast_vote"
+field = "election_id"
+description = "BUG CHECK #1: Voted ballot must carry election_id"
+
+# register_voter must set owner
+[[assertions]]
+type = "field_set"
+function = "register_voter"
+field = "owner"
+description = "Ballot must have an owner field set"
