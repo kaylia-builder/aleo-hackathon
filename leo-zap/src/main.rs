@@ -4,6 +4,9 @@ mod fuzzer;
 mod invariants;
 mod spec;
 mod leo_runner;
+mod leo_compiler;
+mod web;
+mod web_templates;
 
 use clap::{Parser, Subcommand};
 use colored::Colorize;
@@ -49,6 +52,11 @@ enum Commands {
         #[arg(long)]
         function: Option<String>,
 
+        /// Path to Leo source project (with program.json). Auto-compiles with leo build.
+        /// Alternative to --file for .leo source projects.
+        #[arg(long, verbatim_doc_comment)]
+        source: Option<PathBuf>,
+
         /// Path to Leo project directory (with program.json) for real ZK proof verification
         /// When set, leo run is called for suspicious inputs to generate actual ZK proofs
         #[arg(long, verbatim_doc_comment)]
@@ -77,6 +85,11 @@ enum Commands {
         #[arg(short, long, default_value_t = 0)]
         seed: u64,
 
+        /// Path to Leo source project (with program.json). Auto-compiles with leo build.
+        /// Alternative to --file for .leo source projects.
+        #[arg(long, verbatim_doc_comment)]
+        source: Option<PathBuf>,
+
         /// Path to Leo project directory (with program.json) for real ZK proof verification
         /// When set, leo run is called for suspicious inputs to generate actual ZK proofs
         #[arg(long, verbatim_doc_comment)]
@@ -87,9 +100,16 @@ enum Commands {
         #[arg(long, verbatim_doc_comment)]
         verify_all: bool,
     },
+    /// Start the web dashboard (browser UI for fuzzing)
+    Serve {
+        /// Port to listen on
+        #[arg(short, long, default_value_t = 3000)]
+        port: u16,
+    },
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     env_logger::init();
     let cli = Cli::parse();
 
@@ -111,11 +131,20 @@ fn main() -> anyhow::Result<()> {
             runs,
             seed,
             function,
+            source,
             project_dir,
             verify_all,
         } => {
-            let content = std::fs::read_to_string(&file)
-                .map_err(|e| anyhow::anyhow!("failed to read {}: {}", file.display(), e))?;
+            // If --source is set, auto-compile the Leo project
+            let aleo_file = if let Some(ref src_dir) = source {
+                leo_compiler::build_project(src_dir)
+                    .map_err(|e| anyhow::anyhow!("{}", e))?
+            } else {
+                file.clone()
+            };
+
+            let content = std::fs::read_to_string(&aleo_file)
+                .map_err(|e| anyhow::anyhow!("failed to read {}: {}", aleo_file.display(), e))?;
 
             let contract = parser::parse(&content)?;
 
@@ -151,6 +180,7 @@ fn main() -> anyhow::Result<()> {
                 spec: None,
                 project_dir,
                 verify_all_with_leo: verify_all,
+                source_dir: source.clone(),
             };
 
             let runner = fuzzer::FuzzRunner::new(config, contract, content);
@@ -162,11 +192,20 @@ fn main() -> anyhow::Result<()> {
             spec,
             runs,
             seed,
+            source,
             project_dir,
             verify_all,
         } => {
-            let content = std::fs::read_to_string(&file)
-                .map_err(|e| anyhow::anyhow!("failed to read {}: {}", file.display(), e))?;
+            // If --source is set, auto-compile the Leo project
+            let aleo_file = if let Some(ref src_dir) = source {
+                leo_compiler::build_project(src_dir)
+                    .map_err(|e| anyhow::anyhow!("{}", e))?
+            } else {
+                file.clone()
+            };
+
+            let content = std::fs::read_to_string(&aleo_file)
+                .map_err(|e| anyhow::anyhow!("failed to read {}: {}", aleo_file.display(), e))?;
 
             let contract = parser::parse(&content)?;
 
@@ -222,11 +261,15 @@ fn main() -> anyhow::Result<()> {
                 spec: Some(invariant_spec.clone()),
                 project_dir,
                 verify_all_with_leo: verify_all,
+                source_dir: source.clone(),
             };
 
             let runner = fuzzer::FuzzRunner::new(config, contract, content);
             let report = runner.run();
             print!("{}", report.pretty_print_with_spec(&invariant_spec));
+        }
+        Commands::Serve { port } => {
+            web::start_server(port).await?;
         }
     }
     Ok(())

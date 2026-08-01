@@ -9,6 +9,7 @@
 use crate::parser::{FunctionDef, Param, RecordDef};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // ============================================================================
@@ -17,7 +18,7 @@ use std::collections::HashMap;
 
 /// A value tracked during symbolic execution of .aleo instructions.
 /// Covers all Aleo types relevant to the fuzzer.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SymValue {
     /// An Aleo address: "aleo1..."
     Address(String),

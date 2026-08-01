@@ -33,10 +33,14 @@ cargo run -- fuzz --file ../token_demo/build/token/token.aleo --runs 100 --seed 
 cargo run -- check --file ../token_demo/build/token/token.aleo --spec ../contracts/invariants/token.toml --runs 100 --seed 42
 # Fuzz the bugged contract (all 3 bugs caught!)
 cargo run -- check --file ../contracts/token_bugged/build/token/token.aleo --spec ../contracts/invariants/token_bugged.toml --runs 100 --seed 42
+# Fuzz directly from .leo source (auto-compiles with leo build)
+cargo run -- fuzz --source ../contracts/token_safe --runs 100
 # Run with real ZK proof verification (requires Leo CLI installed)
-cargo run -- fuzz --file ../contracts/token_safe/build/token/token.aleo --project-dir ../contracts/token_safe --runs 100
+cargo run -- fuzz --source ../contracts/token_safe --project-dir ../contracts/token_safe --runs 100
 # Exhaustive ZK verification (verify ALL runs, not just suspicious ones)
-cargo run -- fuzz --file ../contracts/token_safe/build/token/token.aleo --project-dir ../contracts/token_safe --verify-all --runs 50
+cargo run -- fuzz --source ../contracts/token_safe --project-dir ../contracts/token_safe --verify-all --runs 50
+# Start the web dashboard
+cargo run -- serve
 ```
 
 ## Demo

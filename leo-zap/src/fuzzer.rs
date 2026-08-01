@@ -21,6 +21,7 @@ use crate::invariants;
 use crate::parser::{Contract, FunctionDef};
 use crate::spec::InvariantSpec;
 use colored::*;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// ZK 验证统计（fuzz_function 内部用）
@@ -37,7 +38,7 @@ struct ZkStats {
 // ============================================================================
 
 /// Parsed .aleo instruction from a function body
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Instruction {
     /// `add rA rB into rC` — rC = rA + rB
     Add {
@@ -102,7 +103,7 @@ pub enum Instruction {
 }
 
 /// An operand in an instruction
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Operand {
     /// A register: `r0`, `r1`, etc.
     Register(String),
@@ -122,7 +123,7 @@ pub enum Operand {
 // ============================================================================
 
 /// Configuration for a fuzzing run
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FuzzConfig {
     /// Number of random input sets per function
     pub runs: u32,
@@ -139,6 +140,8 @@ pub struct FuzzConfig {
     pub project_dir: Option<std::path::PathBuf>,
     /// 是否对每个 run 都做 ZK 验证（默认 false，只对可疑做验证）
     pub verify_all_with_leo: bool,
+    /// Leo 源码目录（含 program.json），如果设置则自动编译
+    pub source_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for FuzzConfig {
@@ -151,12 +154,13 @@ impl Default for FuzzConfig {
             spec: None,
             project_dir: None,
             verify_all_with_leo: false,
+            source_dir: None,
         }
     }
 }
 
 /// Outcome of a single fuzz iteration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FuzzOutcome {
     /// Execution passed with no issues
     Pass,
@@ -182,7 +186,7 @@ impl FuzzOutcome {
 }
 
 /// Result of a single fuzz case
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FuzzResult {
     /// Function name
     pub function: String,
@@ -195,7 +199,7 @@ pub struct FuzzResult {
 }
 
 /// Aggregated report from a fuzzing run
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FuzzReport {
     pub config: FuzzConfig,
     pub total_runs: u32,
