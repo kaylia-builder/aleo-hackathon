@@ -36,14 +36,16 @@
 
 ## 🖥️ Live Demo
 
-```
-🔗 http://bore.pub:46914
+**一键启动**（自动编译、启动服务、创建公网隧道、崩溃自动重启）：
+
+```bash
+./start-demo.sh
 ```
 
-打开浏览器即可体验：配置合约 → 点击 Run Fuzz → 实时 SSE 推送结果 → 图表可视化。
+启动后终端会打印公网 URL（格式 `http://bore.pub:XXXXX`），别人直接点开就能用。
 
 <details>
-<summary>📸 本地运行（点击展开）</summary>
+<summary>📸 手动启动（点击展开）</summary>
 
 ```bash
 git clone https://github.com/kaylia-builder/aleo-hackathon.git
