@@ -22,7 +22,7 @@ use crate::parser::{Contract, FunctionDef};
 use crate::spec::InvariantSpec;
 use colored::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// ZK 验证统计（fuzz_function 内部用）
 #[derive(Default)]
@@ -218,6 +218,8 @@ pub struct FuzzReport {
     pub zk_mismatches: u32,
     /// ZK 验证失败的详情
     pub zk_mismatch_details: Vec<crate::leo_runner::VerificationMismatch>,
+    /// 指令覆盖率 (0.0–100.0)，仅 coverage-guided 模式有效
+    pub coverage_pct: f64,
 }
 
 // ============================================================================
@@ -730,6 +732,46 @@ fn operand_str(op: &Operand) -> String {
 }
 
 // ============================================================================
+// Coverage Tracker
+// ============================================================================
+
+/// Tracks which instructions are hit during fuzzing.
+/// Used for coverage-guided fuzzing and coverage reporting.
+#[derive(Debug, Clone, Default)]
+pub struct CoverageTracker {
+    /// function_name -> set of instruction indices hit
+    pub covered: HashMap<String, HashSet<usize>>,
+    /// function_name -> total instructions in function
+    pub total_instructions: HashMap<String, usize>,
+}
+
+impl CoverageTracker {
+    pub fn new() -> Self { Self::default() }
+
+    /// Record that an instruction was executed
+    pub fn hit(&mut self, func_name: &str, inst_index: usize) {
+        self.covered
+            .entry(func_name.to_string())
+            .or_default()
+            .insert(inst_index);
+    }
+
+    /// Get coverage percentage for a function
+    pub fn coverage_pct(&self, func_name: &str) -> f64 {
+        let total = self.total_instructions.get(func_name).copied().unwrap_or(1) as f64;
+        let hit = self.covered.get(func_name).map(|s| s.len()).unwrap_or(0) as f64;
+        if total == 0.0 { 100.0 } else { (hit / total * 100.0).min(100.0) }
+    }
+
+    /// Get overall coverage percentage across all functions
+    pub fn overall_coverage(&self) -> f64 {
+        let total: usize = self.total_instructions.values().sum();
+        let hit: usize = self.covered.values().map(|s| s.len()).sum();
+        if total == 0 { 100.0 } else { (hit as f64 / total as f64 * 100.0).min(100.0) }
+    }
+}
+
+// ============================================================================
 // FuzzRunner
 // ============================================================================
 
@@ -765,6 +807,7 @@ impl FuzzRunner {
             zk_proofs_generated: 0,
             zk_mismatches: 0,
             zk_mismatch_details: Vec::new(),
+            coverage_pct: 0.0,
         };
 
         // Determine which functions to fuzz
@@ -784,13 +827,20 @@ impl FuzzRunner {
         let remainder = self.config.runs % func_count;
 
         let mut gen = InputGenerator::new(self.config.seed);
+        let mut coverage = CoverageTracker::new();
 
         for (i, func) in functions.iter().enumerate() {
             let extra = if (i as u32) < remainder { 1 } else { 0 };
             let func_runs = runs_per_func + extra;
 
+            // Pre-compute instruction count for coverage tracking
+            let body_insts = FuzzRunner::extract_instructions_from_content(
+                &self.raw_content, &func.name,
+            );
+            coverage.total_instructions.insert(func.name.clone(), body_insts.len());
+
             let (func_passed, func_violations, func_errors, func_results, zk_stats) =
-                self.fuzz_function(func, func_runs, &mut gen);
+                self.fuzz_function(func, func_runs, &mut gen, &mut coverage);
 
             report.total_runs += func_runs;
             report.passed += func_passed;
@@ -808,6 +858,7 @@ impl FuzzRunner {
             report.zk_mismatch_details.extend(zk_stats.mismatch_details);
         }
 
+        report.coverage_pct = coverage.overall_coverage();
         report
     }
 
@@ -817,6 +868,7 @@ impl FuzzRunner {
         func: &FunctionDef,
         runs: u32,
         gen: &mut InputGenerator,
+        coverage: &mut CoverageTracker,
     ) -> (u32, u32, u32, Vec<FuzzResult>, ZkStats) {
         let mut passed = 0u32;
         let mut violations = 0u32;
@@ -829,10 +881,11 @@ impl FuzzRunner {
             || func.outputs.iter().any(|p| p.ty.contains("record"));
 
         for _ in 0..runs {
-            // 生成随机输入
-            let inputs = gen.generate_inputs(func, &self.contract.records);
+            // Generate inputs with coverage-guided strategy
+            let inputs = gen.generate_with_coverage(func, &self.contract.records);
             let input_strings: Vec<String> =
                 inputs.iter().map(|(_, v)| v.to_leo_string()).collect();
+            let prev_coverage = coverage.covered.get(&func.name).map(|s| s.len()).unwrap_or(0);
 
             // 解析函数体指令
             let body_instructions = FuzzRunner::extract_instructions_from_content(
@@ -844,10 +897,18 @@ impl FuzzRunner {
             let mut state = SymbolicState::with_inputs(inputs.clone());
             let mut all_violations = Vec::new();
 
-            for inst in &body_instructions {
+            for (idx, inst) in body_instructions.iter().enumerate() {
                 let inst_violations =
                     execute_instruction(inst, &mut state, &func.name, &self.contract.records);
                 all_violations.extend(inst_violations);
+                // Track coverage: this instruction index was hit
+                coverage.hit(&func.name, idx);
+            }
+
+            // If new instructions were covered, add to corpus for mutation
+            let new_coverage = coverage.covered.get(&func.name).map(|s| s.len()).unwrap_or(0);
+            if new_coverage > prev_coverage {
+                gen.corpus.add(&func.name, inputs.clone());
             }
 
             // 检查额外不变式
@@ -1080,6 +1141,11 @@ impl FuzzReport {
         out.push_str(&format!(
             "  {} Violations\n",
             format!("{}", self.violations).red()
+        ));
+        let cov_str = format!("{:.0}%", self.coverage_pct);
+        out.push_str(&format!(
+            "  Instruction coverage: {}\n",
+            cov_str.cyan()
         ));
         if self.errors > 0 {
             out.push_str(&format!(
@@ -1620,6 +1686,7 @@ function transfer_private:
             zk_proofs_generated: 0,
             zk_mismatches: 0,
             zk_mismatch_details: vec![],
+            coverage_pct: 0.0,
         };
 
         let output = report.pretty_print();
@@ -1652,6 +1719,7 @@ function transfer_private:
             zk_proofs_generated: 0,
             zk_mismatches: 0,
             zk_mismatch_details: vec![],
+            coverage_pct: 0.0,
         };
 
         let output = report.pretty_print();
@@ -1674,6 +1742,7 @@ function transfer_private:
             zk_proofs_generated: 47,
             zk_mismatches: 3,
             zk_mismatch_details: vec![],
+            coverage_pct: 0.0,
         };
 
         let output = report.pretty_print();

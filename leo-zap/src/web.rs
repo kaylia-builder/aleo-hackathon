@@ -356,6 +356,7 @@ fn run_fuzz_with_events(
         zk_proofs_generated: 0,
         zk_mismatches: 0,
         zk_mismatch_details: Vec::new(),
+            coverage_pct: 0.0,
     };
 
     let functions: Vec<&parser::FunctionDef> = if let Some(ref filter) = config.function_filter {

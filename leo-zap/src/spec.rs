@@ -79,6 +79,12 @@ impl InvariantSettings {
             if overrides.overflow_check.is_some() {
                 effective.overflow_check = overrides.overflow_check;
             }
+            if overrides.record_consumption.is_some() {
+                effective.record_consumption = overrides.record_consumption;
+            }
+            if overrides.private_param_usage.is_some() {
+                effective.private_param_usage = overrides.private_param_usage;
+            }
         }
         effective
     }
@@ -103,6 +109,12 @@ pub struct InvariantToggle {
     /// Check for unsigned integer overflow in arithmetic
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overflow_check: Option<bool>,
+    /// Verify input records are consumed (transformed, not passed through)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_consumption: Option<bool>,
+    /// Flag unused .private input parameters
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_param_usage: Option<bool>,
 }
 
 impl InvariantToggle {
@@ -118,6 +130,8 @@ impl InvariantToggle {
             "zero_amount" => self.zero_amount.unwrap_or(false),
             "self_transfer" => self.self_transfer.unwrap_or(false),
             "overflow_check" => self.overflow_check.unwrap_or(true),
+            "record_consumption" => self.record_consumption.unwrap_or(true),
+            "private_param_usage" => self.private_param_usage.unwrap_or(false),
             _ => true,
         }
     }

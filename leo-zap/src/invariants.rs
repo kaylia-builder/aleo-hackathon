@@ -46,6 +46,16 @@ pub fn check_function_invariants(
                 violations.extend(v);
             }
         }
+        if toggle.is_enabled("record_consumption") {
+            if let Some(v) = check_record_consumption(func, state) {
+                violations.extend(v);
+            }
+        }
+        if toggle.is_enabled("private_param_usage") {
+            if let Some(v) = check_private_param_usage(func, state) {
+                violations.extend(v);
+            }
+        }
 
         // Evaluate custom assertions from the spec
         for assertion in &spec.assertions {
@@ -409,6 +419,75 @@ fn check_range(
     } else {
         Some(violations)
     }
+}
+
+/// Check that input records are consumed (transformed), not passed through unchanged.
+/// This catches double-spend bugs where the same record appears in both input and output.
+fn check_record_consumption(func: &FunctionDef, state: &SymbolicState) -> Option<Vec<String>> {
+    let mut violations = Vec::new();
+
+    for input in &func.inputs {
+        if !input.ty.ends_with(".record") {
+            continue;
+        }
+
+        // Get the input record
+        let input_record = match state.get(&input.register) {
+            Some(SymValue::Record { fields, .. }) => fields,
+            _ => continue,
+        };
+
+        // Check if any output record is identical (same owner + amount)
+        for output in &func.outputs {
+            if !output.ty.ends_with(".record") {
+                continue;
+            }
+            let output_record = match state.get(&output.register) {
+                Some(SymValue::Record { fields, .. }) => fields,
+                _ => continue,
+            };
+
+            // Compare: same owner AND same amount = record not consumed
+            let same_owner = input_record.get("owner") == output_record.get("owner");
+            let same_amount = input_record.get("amount") == output_record.get("amount");
+            if same_owner && same_amount && input_record.get("owner").is_some() {
+                violations.push(format!(
+                    "RECORD_NOT_CONSUMED in {}: input {} and output {} have identical owner+amount — possible double-spend",
+                    func.name, input.register, output.register
+                ));
+            }
+        }
+    }
+
+    if violations.is_empty() { None } else { Some(violations) }
+}
+
+/// Check that `.private` input parameters are actually accessed during execution.
+/// Unused private params suggest dead code or incomplete privacy implementation.
+fn check_private_param_usage(func: &FunctionDef, state: &SymbolicState) -> Option<Vec<String>> {
+    let mut violations = Vec::new();
+
+    for input in &func.inputs {
+        if input.visibility != crate::parser::Visibility::Private {
+            continue;
+        }
+
+        // Check if the register has a value that was set (meaning it was read/written)
+        match state.get(&input.register) {
+            None => {
+                violations.push(format!(
+                    "UNUSED_PRIVATE_PARAM in {}: private param {} ({}) was never accessed",
+                    func.name, input.register, input.ty
+                ));
+            }
+            Some(SymValue::Unknown) => {
+                // Unknown means it was never resolved — likely unused
+            }
+            _ => {} // Register was used
+        }
+    }
+
+    if violations.is_empty() { None } else { Some(violations) }
 }
 
 // ============================================================================

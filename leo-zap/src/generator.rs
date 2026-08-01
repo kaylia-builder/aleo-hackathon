@@ -133,10 +133,44 @@ impl Default for GeneratorConfig {
     }
 }
 
+/// Corpus of interesting inputs, used for coverage-guided mutation.
+#[derive(Debug, Clone, Default)]
+pub struct InputCorpus {
+    /// Per-function corpus: function_name -> list of input sets
+    pub entries: HashMap<String, Vec<Vec<(String, SymValue)>>>,
+}
+
+impl InputCorpus {
+    pub fn new() -> Self { Self::default() }
+
+    /// Add an input set to the corpus for a function
+    pub fn add(&mut self, func_name: &str, inputs: Vec<(String, SymValue)>) {
+        self.entries
+            .entry(func_name.to_string())
+            .or_default()
+            .push(inputs);
+    }
+
+    /// Get a random entry from the corpus for a function, if any
+    pub fn get_random(&self, func_name: &str, rng: &mut StdRng) -> Option<&[(String, SymValue)]> {
+        let entries = self.entries.get(func_name)?;
+        if entries.is_empty() { return None; }
+        let idx = rng.gen_range(0..entries.len());
+        Some(&entries[idx])
+    }
+
+    /// Number of entries for a function
+    pub fn len_for(&self, func_name: &str) -> usize {
+        self.entries.get(func_name).map(|v| v.len()).unwrap_or(0)
+    }
+}
+
 /// Generates random Aleo values for fuzzing contract functions.
 pub struct InputGenerator {
     rng: StdRng,
     config: GeneratorConfig,
+    /// Optional corpus for coverage-guided mutation
+    pub corpus: InputCorpus,
 }
 
 impl InputGenerator {
@@ -145,6 +179,7 @@ impl InputGenerator {
         Self {
             rng: StdRng::seed_from_u64(seed),
             config: GeneratorConfig::default(),
+            corpus: InputCorpus::new(),
         }
     }
 
@@ -153,7 +188,48 @@ impl InputGenerator {
         Self {
             rng: StdRng::seed_from_u64(seed),
             config,
+            corpus: InputCorpus::new(),
         }
+    }
+
+    /// Mutate an existing input set by randomly changing one field.
+    /// Used for coverage-guided fuzzing — explores near a known-interesting input.
+    pub fn mutate(
+        &mut self,
+        original: &[(String, SymValue)],
+        func: &FunctionDef,
+        records: &[crate::parser::RecordDef],
+    ) -> Vec<(String, SymValue)> {
+        let mut mutated: Vec<(String, SymValue)> = original.to_vec();
+        if mutated.is_empty() { return mutated; }
+
+        // Pick a random parameter to mutate
+        let idx = self.rng.gen_range(0..mutated.len());
+        let param = &func.inputs[idx];
+        let new_val = self.gen_param_value(param, records);
+        mutated[idx].1 = new_val;
+        mutated
+    }
+
+    /// Generate inputs with coverage-guided strategy:
+    /// - 30% chance: mutate from corpus (if available)
+    /// - 70% chance: generate fresh random inputs
+    pub fn generate_with_coverage(
+        &mut self,
+        func: &FunctionDef,
+        records: &[crate::parser::RecordDef],
+    ) -> Vec<(String, SymValue)> {
+        // 30% mutation from corpus (if we have entries)
+        if self.rng.gen::<f64>() < 0.3 {
+            // Clone the entry to avoid borrow conflict
+            let entry_opt = self.corpus.get_random(&func.name, &mut self.rng)
+                .map(|e| e.to_vec());
+            if let Some(entry) = entry_opt {
+                return self.mutate(&entry, func, records);
+            }
+        }
+        // Otherwise fresh random
+        self.generate_inputs(func, records)
     }
 
     /// Generate inputs for all parameters of a function.
