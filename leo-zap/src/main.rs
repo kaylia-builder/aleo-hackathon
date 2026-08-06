@@ -1,15 +1,12 @@
-mod parser;
-mod generator;
-mod fuzzer;
-mod invariants;
-mod spec;
 mod leo_runner;
 mod leo_compiler;
 mod web;
 mod web_templates;
+mod report_fmt;
 
 use clap::{Parser, Subcommand};
 use colored::Colorize;
+use report_fmt::{FuzzReportExt, ContractExt};
 use std::path::PathBuf;
 
 /// LeoZap - Property-based fuzzer + privacy invariant checker for Aleo Leo contracts
@@ -118,7 +115,7 @@ async fn main() -> anyhow::Result<()> {
             let content = std::fs::read_to_string(&file)
                 .map_err(|e| anyhow::anyhow!("failed to read {}: {}", file.display(), e))?;
 
-            let contract = parser::parse(&content)?;
+            let contract = leo_zap_core::parser::parse(&content)?;
 
             if json {
                 println!("{}", serde_json::to_string_pretty(&contract)?);
@@ -146,7 +143,7 @@ async fn main() -> anyhow::Result<()> {
             let content = std::fs::read_to_string(&aleo_file)
                 .map_err(|e| anyhow::anyhow!("failed to read {}: {}", aleo_file.display(), e))?;
 
-            let contract = parser::parse(&content)?;
+            let contract = leo_zap_core::parser::parse(&content)?;
 
             // Determine seed
             let seed = if seed == 0 {
@@ -172,7 +169,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
 
-            let config = fuzzer::FuzzConfig {
+            let config = leo_zap_core::fuzzer::FuzzConfig {
                 runs,
                 seed,
                 function_filter: function,
@@ -183,7 +180,7 @@ async fn main() -> anyhow::Result<()> {
                 source_dir: source.clone(),
             };
 
-            let runner = fuzzer::FuzzRunner::new(config, contract, content);
+            let runner = leo_zap_core::fuzzer::FuzzRunner::new(config, contract, content);
             let report = runner.run();
             print!("{}", report.pretty_print());
         }
@@ -207,15 +204,15 @@ async fn main() -> anyhow::Result<()> {
             let content = std::fs::read_to_string(&aleo_file)
                 .map_err(|e| anyhow::anyhow!("failed to read {}: {}", aleo_file.display(), e))?;
 
-            let contract = parser::parse(&content)?;
+            let contract = leo_zap_core::parser::parse(&content)?;
 
             let spec_content = std::fs::read_to_string(&spec)
                 .map_err(|e| anyhow::anyhow!("failed to read spec {}: {}", spec.display(), e))?;
-            let invariant_spec = spec::parse_spec(&spec_content)
+            let invariant_spec = leo_zap_core::spec::parse_spec(&spec_content)
                 .map_err(|e| anyhow::anyhow!("failed to parse spec: {}", e))?;
 
             // Print validation warnings to stderr
-            let warnings = spec::validate_spec(&invariant_spec, &contract);
+            let warnings = leo_zap_core::spec::validate_spec(&invariant_spec, &contract);
             for w in &warnings {
                 eprintln!("{} {}", "warning:".yellow(), w);
             }
@@ -253,7 +250,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
 
-            let config = fuzzer::FuzzConfig {
+            let config = leo_zap_core::fuzzer::FuzzConfig {
                 runs,
                 seed,
                 function_filter: None,
@@ -264,7 +261,7 @@ async fn main() -> anyhow::Result<()> {
                 source_dir: source.clone(),
             };
 
-            let runner = fuzzer::FuzzRunner::new(config, contract, content);
+            let runner = leo_zap_core::fuzzer::FuzzRunner::new(config, contract, content);
             let report = runner.run();
             print!("{}", report.pretty_print_with_spec(&invariant_spec));
         }

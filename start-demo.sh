@@ -1,22 +1,56 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# LeoZap Demo Server — 一键启动 Web Dashboard + 公网隧道
+# LeoZap Demo — 启动方式（任选其一）
 #
-# 运行后保持终端开着，公网 URL 会打印在下面。
-# 别人直接点开就能用。
+# 🌐 GitHub Pages (推荐，无需端口)：
+#    推送代码到 main 分支，GitHub Actions 会自动部署到:
+#    https://kaylia-builder.github.io/aleo-hackathon/
+#
+# 🧱 本地 WASM 模式：
+#    ./start-demo.sh wasm       # 构建 WASM + 启动静态服务
+#
+# 🖥️  完整 Server 模式（含 ZK 验证）：
+#    ./start-demo.sh server     # 启动后端 + bore 隧道
 # ==============================================================================
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
-# ── 1. 杀掉旧进程 ──────────────────────────────────────
+MODE="${1:-wasm}"
+
+if [ "$MODE" = "wasm" ]; then
+    echo ""
+    echo "╔══════════════════════════════════════════════════════╗"
+    echo "║       🧱  LeoZap WASM Demo (in-browser fuzzing)     ║"
+    echo "╠══════════════════════════════════════════════════════╣"
+    echo "║                                                      ║"
+    echo "║  🌐  GitHub Pages:                                   ║"
+    echo "║     https://kaylia-builder.github.io/aleo-hackathon/ ║"
+    echo "║                                                      ║"
+    echo "╚══════════════════════════════════════════════════════╝"
+    echo ""
+
+    # ── Build WASM ─────────────────────────────────────
+    echo "🔨 Building WASM module..."
+    rustup target add wasm32-unknown-unknown 2>/dev/null || true
+    cargo build --target wasm32-unknown-unknown -p leo-zap-wasm -q 2>&1 | tail -1 || true
+    wasm-bindgen --target web --out-dir leo-zap-wasm/pkg target/wasm32-unknown-unknown/debug/leo_zap_wasm.wasm 2>/dev/null
+    cp leo-zap-wasm/pkg/*.js leo-zap-wasm/pkg/*.wasm web/
+
+    # ── Start static server ─────────────────────────────
+    echo "🚀 Starting at http://localhost:8080"
+    echo "   (static files only — fuzzing runs in-browser via WASM)"
+    cd web && python3 -m http.server 8080
+    exit 0
+fi
+
+# ── Server mode ────────────────────────────────────────
 echo "🧹 Cleaning up old processes..."
 pkill -f "leo-zap serve" 2>/dev/null || true
 pkill -f "bore local"    2>/dev/null || true
 sleep 1
 
-# ── 2. 编译（如有改动） ──────────────────────────────────
 echo "🔨 Building..."
 cargo build --manifest-path leo-zap/Cargo.toml -q 2>&1 | tail -1 || true
 

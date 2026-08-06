@@ -1,0 +1,3 @@
+[workspace]
+members = ["leo-zap-core", "leo-zap", "leo-zap-wasm"]
+resolver = "2"

@@ -414,75 +414,6 @@ fn format_type_vis(ty: &str, vis: Visibility) -> String {
 // 格式化输出
 // ============================================================================
 
-impl Contract {
-    /// 彩色文本输出（终端友好）
-    pub fn pretty_print(&self) -> String {
-        use colored::*;
-        let mut out = String::new();
-        out.push_str(&format!("{} {}\n", "📊 Contract:".bold(), self.program.cyan()));
-
-        if !self.records.is_empty() {
-            out.push_str(&format!("\n{}\n", "Records:".yellow().bold()));
-            for r in &self.records {
-                let fields: Vec<String> = r
-                    .fields
-                    .iter()
-                    .map(|f| format!("{}: {}", f.name, format_type_vis(&f.ty, f.visibility)))
-                    .collect();
-                out.push_str(&format!("  {} ({})\n", r.name.green(), fields.join(", ")));
-            }
-        }
-
-        if !self.mappings.is_empty() {
-            out.push_str(&format!("\n{}\n", "Mappings:".yellow().bold()));
-            for m in &self.mappings {
-                out.push_str(&format!(
-                    "  {} (key: {}, value: {})\n",
-                    m.name.green(),
-                    m.key_type,
-                    m.value_type
-                ));
-            }
-        }
-
-        if !self.functions.is_empty() {
-            out.push_str(&format!("\n{}\n", "Functions:".yellow().bold()));
-            for f in &self.functions {
-                let ins: Vec<String> = f
-                    .inputs
-                    .iter()
-                    .map(|p| format_type_vis(&p.ty, p.visibility))
-                    .collect();
-                let outs: Vec<String> = f
-                    .outputs
-                    .iter()
-                    .map(|p| format_type_vis(&p.ty, p.visibility))
-                    .collect();
-                out.push_str(&format!(
-                    "  {}({}) → {}\n",
-                    f.name.magenta(),
-                    ins.join(", "),
-                    if outs.is_empty() {
-                        "()".to_string()
-                    } else {
-                        outs.join(", ")
-                    }
-                ));
-            }
-        }
-
-        if !self.finalizes.is_empty() {
-            out.push_str(&format!("\n{}\n", "Finalizes:".yellow().bold()));
-            for f in &self.finalizes {
-                let ins: Vec<String> = f.inputs.iter().map(|p| p.ty.clone()).collect();
-                out.push_str(&format!("  {}({})\n", f.name.magenta(), ins.join(", ")));
-            }
-        }
-
-        out
-    }
-}
-
 // ============================================================================
 // 单元测试
 // ============================================================================
@@ -631,14 +562,14 @@ function mint_private:
     }
 
     #[test]
-    fn test_pretty_print_not_empty() {
+    fn test_serialize_contract() {
         let c = parse(SAMPLE).unwrap();
-        let out = c.pretty_print();
-        assert!(out.contains("token.aleo"));
-        assert!(out.contains("Records:"));
-        assert!(out.contains("Functions:"));
-        assert!(out.contains("mint_public"));
-        assert!(out.contains("mint_private"));
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(json.contains("token.aleo"));
+        assert!(json.contains("\"records\""));
+        assert!(json.contains("\"functions\""));
+        assert!(json.contains("mint_public"));
+        assert!(json.contains("mint_private"));
     }
 
     #[test]

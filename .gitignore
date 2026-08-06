@@ -24,3 +24,10 @@ Thumbs.db
 
 # Demo 临时文件
 demo/raw/
+
+# WASM artifacts (built by GitHub Actions / wasm-pack)
+leo-zap-wasm/pkg/
+web/*.wasm
+web/*_wasm.js
+web/*_wasm.d.ts
+web/*_wasm_bg.wasm.d.ts

@@ -10,10 +10,10 @@
 //! - `GET /api/fuzz/:id/report` — final FuzzReport JSON
 //! - `GET /` — dashboard HTML page
 
-use crate::fuzzer::{self, FuzzConfig, FuzzReport};
-use crate::parser;
-use crate::spec;
 use crate::web_templates::DASHBOARD_HTML;
+use leo_zap_core::fuzzer::{self, FuzzConfig, FuzzReport};
+use leo_zap_core::parser;
+use leo_zap_core::spec;
 use axum::{
     extract::{Multipart, Path, State},
     response::{sse::{Event, Sse}, Json},
@@ -420,7 +420,7 @@ fn run_fuzz_with_events(
     let runs_per_func = config.runs / func_count;
     let remainder = config.runs % func_count;
 
-    let mut gen = crate::generator::InputGenerator::new(config.seed);
+    let mut gen = leo_zap_core::generator::InputGenerator::new(config.seed);
     let mut iteration = 0u32;
 
     for (fi, func) in functions.iter().enumerate() {
@@ -451,7 +451,7 @@ fn run_fuzz_with_events(
                 all_violations.extend(inst_violations);
             }
 
-            if let Some(inv_violations) = crate::invariants::check_function_invariants(
+            if let Some(inv_violations) = leo_zap_core::invariants::check_function_invariants(
                 func, &state, contract, config.spec.as_ref(),
             ) {
                 all_violations.extend(inv_violations);
@@ -487,7 +487,9 @@ fn run_fuzz_with_events(
 
                         if has_mismatch {
                             report.zk_mismatches += 1;
-                            report.zk_mismatch_details.extend(mismatches.clone());
+                            for m in &mismatches {
+                                report.zk_mismatch_details.push(format!("{:?}: {}", m.kind, m.detail));
+                            }
 
                             for m in &mismatches {
                                 report.violation_results.push(fuzzer::FuzzResult {

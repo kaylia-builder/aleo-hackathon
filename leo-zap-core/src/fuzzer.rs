@@ -20,18 +20,8 @@ use crate::generator::{InputGenerator, SymValue};
 use crate::invariants;
 use crate::parser::{Contract, FunctionDef};
 use crate::spec::InvariantSpec;
-use colored::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-
-/// ZK 验证统计（fuzz_function 内部用）
-#[derive(Default)]
-struct ZkStats {
-    verifications: u32,
-    proofs_generated: u32,
-    mismatches: u32,
-    mismatch_details: Vec<crate::leo_runner::VerificationMismatch>,
-}
 
 // ============================================================================
 // Instruction Types
@@ -216,8 +206,8 @@ pub struct FuzzReport {
     pub zk_proofs_generated: u32,
     /// 符号执行和 ZK 验证结果不一致的次数（真实 bug）
     pub zk_mismatches: u32,
-    /// ZK 验证失败的详情
-    pub zk_mismatch_details: Vec<crate::leo_runner::VerificationMismatch>,
+    /// ZK 验证失败的详情（字符串形式）
+    pub zk_mismatch_details: Vec<String>,
     /// 指令覆盖率 (0.0–100.0)，仅 coverage-guided 模式有效
     pub coverage_pct: f64,
 }
@@ -839,7 +829,7 @@ impl FuzzRunner {
             );
             coverage.total_instructions.insert(func.name.clone(), body_insts.len());
 
-            let (func_passed, func_violations, func_errors, func_results, zk_stats) =
+            let (func_passed, func_violations, func_errors, func_results) =
                 self.fuzz_function(func, func_runs, &mut gen, &mut coverage);
 
             report.total_runs += func_runs;
@@ -850,35 +840,25 @@ impl FuzzRunner {
                 .per_function
                 .push((func.name.clone(), func_runs, func_passed, func_violations));
             report.violation_results.extend(func_results);
-
-            // 累加 ZK 统计
-            report.zk_verifications += zk_stats.verifications;
-            report.zk_proofs_generated += zk_stats.proofs_generated;
-            report.zk_mismatches += zk_stats.mismatches;
-            report.zk_mismatch_details.extend(zk_stats.mismatch_details);
         }
 
         report.coverage_pct = coverage.overall_coverage();
         report
     }
 
-    /// Fuzz a single function for N iterations
+    /// Fuzz a single function for N iterations (symbolic execution only, no ZK verification).
+    /// ZK verification is handled by the binary/server layer as a post-processing step.
     fn fuzz_function(
         &self,
         func: &FunctionDef,
         runs: u32,
         gen: &mut InputGenerator,
         coverage: &mut CoverageTracker,
-    ) -> (u32, u32, u32, Vec<FuzzResult>, ZkStats) {
+    ) -> (u32, u32, u32, Vec<FuzzResult>) {
         let mut passed = 0u32;
         let mut violations = 0u32;
         let errors = 0u32;
         let mut violation_results = Vec::new();
-        let mut zk_stats = ZkStats::default();
-
-        // 检查函数是否涉及 record 操作（隐私路径）
-        let involves_record = func.inputs.iter().any(|p| p.ty.contains("record"))
-            || func.outputs.iter().any(|p| p.ty.contains("record"));
 
         for _ in 0..runs {
             // Generate inputs with coverage-guided strategy
@@ -893,7 +873,7 @@ impl FuzzRunner {
                 &func.name,
             );
 
-            // 阶段 1：符号执行
+            // 符号执行
             let mut state = SymbolicState::with_inputs(inputs.clone());
             let mut all_violations = Vec::new();
 
@@ -918,58 +898,8 @@ impl FuzzRunner {
                 all_violations.extend(inv_violations);
             }
 
-            let symbolic_pass = all_violations.is_empty();
-
-            // 阶段 2：ZK 验证（只在特定条件触发）
-            let should_verify_with_leo = self.config.project_dir.is_some() && (
-                self.config.verify_all_with_leo
-                || !symbolic_pass
-                || involves_record
-            );
-
-            if should_verify_with_leo {
-                if let Some(project_dir) = &self.config.project_dir {
-                    if let Some(leo_result) = crate::leo_runner::run_leo_function(
-                        project_dir,
-                        &func.name,
-                        &input_strings,
-                    ) {
-                        zk_stats.verifications += 1;
-                        if leo_result.proof_generated {
-                            zk_stats.proofs_generated += 1;
-                        }
-
-                        // 对比符号执行和真实 ZK 结果
-                        let mismatches = crate::leo_runner::compare_results(
-                            symbolic_pass,
-                            &all_violations,
-                            &leo_result,
-                        );
-                        if !mismatches.is_empty() {
-                            zk_stats.mismatches += 1;
-                            zk_stats.mismatch_details.extend(mismatches.clone());
-
-                            // 把 mismatch 加到 violation_results
-                            for m in &mismatches {
-                                violation_results.push(FuzzResult {
-                                    function: func.name.clone(),
-                                    inputs: inputs.clone(),
-                                    input_strings: input_strings.clone(),
-                                    outcome: FuzzOutcome::Violation {
-                                        invariant: format!("zk_mismatch:{:?}", m.kind),
-                                        detail: m.detail.clone(),
-                                    },
-                                });
-                            }
-                            violations += 1;
-                            continue;
-                        }
-                    }
-                }
-            }
-
             // 记录结果
-            if symbolic_pass {
+            if all_violations.is_empty() {
                 passed += 1;
             } else {
                 violations += 1;
@@ -986,7 +916,7 @@ impl FuzzRunner {
             }
         }
 
-        (passed, violations, errors, violation_results, zk_stats)
+        (passed, violations, errors, violation_results)
     }
 
     /// Extract instructions from a function's body.
@@ -1035,269 +965,6 @@ pub fn is_block_header(line: &str) -> bool {
         || line.starts_with("finalize ")
         || line.starts_with("constructor")
         || line.starts_with("interface ")
-}
-
-// ============================================================================
-// Report Formatting
-// ============================================================================
-
-impl FuzzReport {
-    /// Pretty-print the fuzz report with colors
-    pub fn pretty_print(&self) -> String {
-        let mut out = String::new();
-
-        out.push_str(&format!(
-            "{} (seed: {}, runs: {})\n\n",
-            "⚡ Fuzz Report".bold().bright_yellow(),
-            self.config.seed.to_string().cyan(),
-            self.total_runs.to_string().cyan()
-        ));
-
-        // Per-function breakdown
-        for (func_name, runs, passed, violations) in &self.per_function {
-            let status = if *violations == 0 {
-                "✅".green()
-            } else {
-                "⚠️ ".yellow()
-            };
-
-            let pass_pct = if *runs > 0 {
-                (*passed as f64 / *runs as f64) * 100.0
-            } else {
-                100.0
-            };
-
-            out.push_str(&format!(
-                "  {} {}: {}/{} passed ({:.0}%)",
-                status,
-                func_name.magenta(),
-                passed,
-                runs,
-                pass_pct
-            ));
-
-            if *violations > 0 {
-                out.push_str(&format!(" — {} {}", violations, "violations".red()));
-            }
-
-            out.push('\n');
-        }
-
-        // Violation details
-        if !self.violation_results.is_empty() {
-            out.push_str(&format!(
-                "\n{}\n",
-                "Violations:".red().bold()
-            ));
-
-            let mut underflows = Vec::new();
-            let mut overflows = Vec::new();
-            let mut others = Vec::new();
-
-            for result in &self.violation_results {
-                if let FuzzOutcome::Violation { detail, .. } = &result.outcome {
-                    if detail.contains("UNDERFLOW") {
-                        underflows.push((result, detail));
-                    } else if detail.contains("OVERFLOW") {
-                        overflows.push((result, detail));
-                    } else {
-                        others.push((result, detail));
-                    }
-                }
-            }
-
-            let all_violations: Vec<&(&FuzzResult, &String)> = underflows
-                .iter()
-                .chain(overflows.iter())
-                .chain(others.iter())
-                .take(5)
-                .collect();
-
-            for (result, detail) in &all_violations {
-                out.push_str(&format!(
-                    "  {} {}: {}\n",
-                    "▸".red(),
-                    result.function.magenta(),
-                    detail
-                ));
-                out.push_str(&format!(
-                    "    inputs: {}\n",
-                    result.input_strings.join(", ").dimmed()
-                ));
-            }
-
-            if all_violations.len() < self.violation_results.len() {
-                out.push_str(&format!(
-                    "  ... and {} more violations\n",
-                    self.violation_results.len() - all_violations.len()
-                ));
-            }
-        }
-
-        // Summary
-        out.push_str(&format!("\n{}\n", "Summary:".bold()));
-        out.push_str(&format!("  Total runs: {}\n", self.total_runs));
-        out.push_str(&format!("  {} Passed\n", format!("{}", self.passed).green()));
-        out.push_str(&format!(
-            "  {} Violations\n",
-            format!("{}", self.violations).red()
-        ));
-        let cov_str = format!("{:.0}%", self.coverage_pct);
-        out.push_str(&format!(
-            "  Instruction coverage: {}\n",
-            cov_str.cyan()
-        ));
-        if self.errors > 0 {
-            out.push_str(&format!(
-                "  {} Errors\n",
-                format!("{}", self.errors).red()
-            ));
-        }
-
-        // ZK 验证统计（核心：展示使用了 Aleo 隐私能力）
-        if self.zk_verifications > 0 {
-            out.push_str(&format!("\n{}\n", "Privacy Capability Used:".bold().bright_cyan()));
-            out.push_str(&format!(
-                "  {} ZK proof verifications via leo run\n",
-                self.zk_verifications.to_string().cyan()
-            ));
-            out.push_str(&format!(
-                "  {} ZK proofs generated successfully\n",
-                self.zk_proofs_generated.to_string().green()
-            ));
-            out.push_str(&format!(
-                "  {} Mismatches (symbolic vs ZK) — true bugs\n",
-                self.zk_mismatches.to_string().red()
-            ));
-        }
-
-        out
-    }
-
-    /// Pretty-print a spec-directed invariant check report
-    pub fn pretty_print_with_spec(&self, spec: &InvariantSpec) -> String {
-        let mut out = String::new();
-
-        out.push_str(&format!(
-            "{} {}\n\n",
-            "Invariant Check Report".bold().bright_yellow(),
-            format!("(spec: {})", spec.contract.name).cyan()
-        ));
-
-        out.push_str(&format!(
-            "{} {} runs (seed: {})\n\n",
-            "Ran".bold(),
-            self.total_runs.to_string().cyan(),
-            self.config.seed.to_string().cyan()
-        ));
-
-        for (func_name, runs, passed, violations) in &self.per_function {
-            let status = if *violations == 0 {
-                "PASS".green()
-            } else {
-                "FAIL".red()
-            };
-            let toggle = spec.invariants.resolve(func_name);
-
-            let mut active: Vec<&str> = Vec::new();
-            if toggle.is_enabled("balance_conservation") {
-                active.push("balance");
-            }
-            if toggle.is_enabled("owner_integrity") {
-                active.push("owner");
-            }
-            if toggle.is_enabled("zero_amount") {
-                active.push("zero-amt");
-            }
-            if toggle.is_enabled("overflow_check") {
-                active.push("overflow");
-            }
-            if toggle.is_enabled("self_transfer") {
-                active.push("self-xfer");
-            }
-
-            let pass_pct = if *runs > 0 {
-                (*passed as f64 / *runs as f64) * 100.0
-            } else {
-                100.0
-            };
-
-            out.push_str(&format!(
-                "  {} {}: {}/{} ({:.0}%)  invariants: [{}]\n",
-                status,
-                func_name.magenta(),
-                passed,
-                runs,
-                pass_pct,
-                active.join(", ").dimmed()
-            ));
-        }
-
-        if !spec.assertions.is_empty() {
-            out.push_str(&format!(
-                "\n{} ({} defined)\n",
-                "Custom Assertions:".bold(),
-                spec.assertions.len().to_string().cyan()
-            ));
-            for a in &spec.assertions {
-                let type_str = format!("{:?}", a.assertion_type).to_lowercase();
-                out.push_str(&format!(
-                    "  {} [{}] {} — {}\n",
-                    "▸".dimmed(),
-                    type_str.dimmed(),
-                    a.function.magenta(),
-                    a.description
-                ));
-            }
-        }
-
-        if !self.violation_results.is_empty() {
-            out.push_str(&format!("\n{}\n", "Violations:".red().bold()));
-            for result in self.violation_results.iter().take(10) {
-                if let FuzzOutcome::Violation { invariant, detail } = &result.outcome {
-                    out.push_str(&format!(
-                        "  {} [{}] {}: {}\n",
-                        "▸".red(),
-                        invariant.yellow(),
-                        result.function.magenta(),
-                        detail
-                    ));
-                }
-            }
-            if self.violation_results.len() > 10 {
-                out.push_str(&format!(
-                    "  ... and {} more violations\n",
-                    self.violation_results.len() - 10
-                ));
-            }
-        }
-
-        out.push_str(&format!(
-            "\n{} {} passed, {} violations\n",
-            "Result:".bold(),
-            format!("{}", self.passed).green(),
-            format!("{}", self.violations).red()
-        ));
-
-        // ZK 验证统计
-        if self.zk_verifications > 0 {
-            out.push_str(&format!("\n{}\n", "Privacy Capability Used:".bold().bright_cyan()));
-            out.push_str(&format!(
-                "  {} ZK proof verifications via leo run\n",
-                self.zk_verifications.to_string().cyan()
-            ));
-            out.push_str(&format!(
-                "  {} ZK proofs generated successfully\n",
-                self.zk_proofs_generated.to_string().green()
-            ));
-            out.push_str(&format!(
-                "  {} Mismatches (symbolic vs ZK) — true bugs\n",
-                self.zk_mismatches.to_string().red()
-            ));
-        }
-
-        out
-    }
 }
 
 // ============================================================================
@@ -1673,63 +1340,7 @@ function transfer_private:
     }
 
     #[test]
-    fn test_fuzz_report_empty() {
-        let report = FuzzReport {
-            config: FuzzConfig::default(),
-            total_runs: 100,
-            passed: 100,
-            violations: 0,
-            errors: 0,
-            per_function: vec![("mint_private".to_string(), 100, 100, 0)],
-            violation_results: vec![],
-            zk_verifications: 0,
-            zk_proofs_generated: 0,
-            zk_mismatches: 0,
-            zk_mismatch_details: vec![],
-            coverage_pct: 0.0,
-        };
-
-        let output = report.pretty_print();
-        assert!(output.contains("⚡ Fuzz Report"));
-        assert!(output.contains("mint_private"));
-        assert!(output.contains("100"));
-    }
-
-    #[test]
-    fn test_fuzz_report_with_violations() {
-        let report = FuzzReport {
-            config: FuzzConfig::default(),
-            total_runs: 200,
-            passed: 180,
-            violations: 20,
-            errors: 0,
-            per_function: vec![
-                ("transfer_private".to_string(), 200, 180, 20),
-            ],
-            violation_results: vec![FuzzResult {
-                function: "transfer_private".to_string(),
-                inputs: vec![],
-                input_strings: vec!["token { ... }".to_string(), "aleo1...".to_string(), "100u64".to_string()],
-                outcome: FuzzOutcome::Violation {
-                    invariant: "fuzz".to_string(),
-                    detail: "UNDERFLOW in transfer_private: sub r0.amount r2 — 50 < 100 would underflow u64".to_string(),
-                },
-            }],
-            zk_verifications: 0,
-            zk_proofs_generated: 0,
-            zk_mismatches: 0,
-            zk_mismatch_details: vec![],
-            coverage_pct: 0.0,
-        };
-
-        let output = report.pretty_print();
-        assert!(output.contains("UNDERFLOW"));
-        assert!(output.contains("transfer_private"));
-        assert!(output.contains("20 violations"));
-    }
-
-    #[test]
-    fn test_fuzz_report_with_zk_stats() {
+    fn test_fuzz_report_serialization() {
         let report = FuzzReport {
             config: FuzzConfig::default(),
             total_runs: 100,
@@ -1738,17 +1349,16 @@ function transfer_private:
             errors: 0,
             per_function: vec![("mint_private".to_string(), 100, 95, 5)],
             violation_results: vec![],
-            zk_verifications: 50,
-            zk_proofs_generated: 47,
-            zk_mismatches: 3,
+            zk_verifications: 0,
+            zk_proofs_generated: 0,
+            zk_mismatches: 0,
             zk_mismatch_details: vec![],
             coverage_pct: 0.0,
         };
 
-        let output = report.pretty_print();
-        assert!(output.contains("Privacy Capability Used"));
-        assert!(output.contains("50 ZK proof verifications"));
-        assert!(output.contains("47 ZK proofs generated"));
-        assert!(output.contains("3 Mismatches"));
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("\"total_runs\":100"));
+        assert!(json.contains("\"passed\":95"));
+        assert!(json.contains("\"violations\":5"));
     }
 }

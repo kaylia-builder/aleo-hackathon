@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LeoZap — Aleo Contract Fuzzer</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<header>
+  <h1>&#x1f981; LeoZap</h1>
+  <span>Aleo Contract Fuzzer + Privacy Invariant Checker</span>
+  <span class="badge">ZK VERIFICATION</span>
+  <span class="mode-badge" id="mode-badge">Loading...</span>
+</header>
+
+<form id="fuzz-form">
+  <!-- Drag & Drop Upload Zone -->
+  <div class="form-full" id="drop-zone" style="
+    border: 2px dashed var(--border); border-radius: 8px; padding: 20px;
+    text-align: center; cursor: pointer; transition: 0.2s; margin-bottom: 4px;
+    background: var(--bg);
+  ">
+    <div style="font-size: 28px; margin-bottom: 4px;">📂</div>
+    <div style="font-size: 14px; color: var(--text);">
+      <b>Drag & Drop</b> your .aleo or .leo file here
+    </div>
+    <div style="font-size: 11px; color: var(--dim); margin-top: 2px;">
+      or click to browse — read locally (no server upload)
+    </div>
+    <input type="file" id="file-upload" accept=".aleo,.leo" style="display:none">
+    <div id="upload-status" style="font-size: 12px; margin-top: 6px;"></div>
+  </div>
+  <div>
+    <label>.aleo File Content</label>
+    <div id="file-name-display" style="font-size:12px;color:var(--dim);margin-bottom:4px;"></div>
+    <input type="text" id="file-path" value="" placeholder="Paste path or upload a file above" required>
+  </div>
+  <div>
+    <label>OR: Leo Source Dir (server only)</label>
+    <input type="text" id="source-dir" placeholder="e.g. contracts/token_safe" disabled>
+  </div>
+  <div>
+    <label>Spec File (optional)</label>
+    <input type="text" id="spec-path" placeholder="Leave empty for fuzz mode">
+  </div>
+  <div>
+    <label>Project Dir (for ZK, server only)</label>
+    <input type="text" id="project-dir" placeholder="Optional: Leo project dir" disabled>
+  </div>
+  <div>
+    <label>Runs</label>
+    <input type="number" id="runs" value="200" min="1" max="10000">
+  </div>
+  <div>
+    <label>Seed (0 = random)</label>
+    <input type="number" id="seed" value="0" min="0">
+  </div>
+  <div>
+    <label>Function Filter</label>
+    <input type="text" id="function-filter" placeholder="All functions">
+  </div>
+  <div class="form-full">
+    <button type="submit" class="btn btn-run" id="btn-run">&#x26a1; Run Fuzz</button>
+    <button type="button" class="btn btn-stop" id="btn-stop" style="display:none">&#x25a0; Stop</button>
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+      <input type="checkbox" id="verify-all" style="width:auto;" disabled>
+      <span>Verify ALL with ZK (slow, server only)</span>
+    </label>
+    <span id="status-indicator" style="font-size:13px;">
+      <span class="status-dot dot-idle"></span> Ready
+    </span>
+  </div>
+</form>
+
+<div class="stats-grid">
+  <div class="stat-card stat-pass">
+    <div class="value" id="stat-passed">—</div>
+    <div class="label">Passed</div>
+  </div>
+  <div class="stat-card stat-violation">
+    <div class="value" id="stat-violations">—</div>
+    <div class="label">Violations</div>
+  </div>
+  <div class="stat-card stat-zk">
+    <div class="value" id="stat-zk-proofs">—</div>
+    <div class="label">ZK Proofs Generated</div>
+  </div>
+  <div class="stat-card stat-mismatch">
+    <div class="value" id="stat-mismatches">—</div>
+    <div class="label">ZK Mismatches (Real Bugs)</div>
+  </div>
+</div>
+
+<div class="progress-section" id="progress-section" style="display:none">
+  <h3>Per-Function Progress</h3>
+  <div id="progress-bars"></div>
+</div>
+
+<div class="log-section">
+  <h3>Event Log</h3>
+  <div class="log-container" id="log-container">
+    <div class="log-entry"><span class="iter">—</span>Waiting for fuzz run to start...</div>
+  </div>
+</div>
+
+<div class="charts-grid" id="charts-section" style="display:none">
+  <div class="chart-card">
+    <h3>Results Overview</h3>
+    <canvas id="chart-donut"></canvas>
+  </div>
+  <div class="chart-card">
+    <h3>Per-Function Breakdown</h3>
+    <canvas id="chart-bar"></canvas>
+  </div>
+</div>
+
+<div class="zk-highlight" id="zk-highlight" style="display:none">
+  <h2>&#x1f512; Aleo Privacy Capability Used</h2>
+  <p>
+    Each ZK verification calls <code>leo run</code> to generate a real zero-knowledge proof via <strong>snarkVM</strong>.
+    The symbolic execution result is compared against the real ZK execution.
+    <strong>Mismatches</strong> between the two indicate genuine privacy-semantic bugs &mdash;
+    cases where the contract's privacy invariants are violated.
+  </p>
+  <p style="margin-top:8px;font-size:13px;color:var(--dim);">
+    &#x2705; <span id="zk-verify-count">0</span> ZK verifications performed &nbsp;|&nbsp;
+    &#x274c; <span id="zk-mismatch-count">0</span> mismatches detected
+  </p>
+</div>
+
+<footer>
+  LeoZap — Property-based fuzzer + privacy invariant checker for Aleo &middot; Built with Rust + WASM &middot;
+  <a href="https://github.com/kaylia-builder/aleo-hackathon" style="color:var(--cyan)">GitHub</a>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
