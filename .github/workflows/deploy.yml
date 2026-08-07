@@ -25,11 +25,19 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
-      - name: Install wasm-pack
-        run: cargo install wasm-pack
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "leo-zap-wasm -> target"
+          cache-all-crates: true
 
-      - name: Build WASM
-        run: wasm-pack build --target web leo-zap-wasm
+      - name: Install wasm-pack (pre-built binary)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      - name: Build WASM (skip wasm-opt for speed)
+        run: wasm-pack build --target web --no-opt leo-zap-wasm
 
       - name: Prepare deploy dir
         run: |
